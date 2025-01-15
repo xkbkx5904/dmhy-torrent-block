@@ -272,17 +272,13 @@ function addContextMenu() {
             e.preventDefault();
             const userId = userLink.href.match(/user_id\/(\d+)/)?.[1];
             if (userId) {
-                const rect = userLink.getBoundingClientRect();
-                const scrollX = window.scrollX;
-                const scrollY = window.scrollY;
-                
                 menu.style.display = 'block';
-                menu.style.left = (rect.left + scrollX) + 'px';
-                menu.style.top = (rect.bottom + scrollY) + 'px';
+                menu.style.left = e.clientX + 'px';
+                menu.style.top = e.clientY + 'px';
                 
-                // 点击添加到黑名单
                 const blockUserOption = document.getElementById('block-user');
-                blockUserOption.onclick = function() {
+                blockUserOption.onclick = function(e) {
+                    e.stopPropagation();
                     addUserToBlocklist(parseInt(userId));
                     menu.style.display = 'none';
                 };
@@ -290,8 +286,15 @@ function addContextMenu() {
         }
     });
 
-    // 点击其他地方关闭菜单
-    document.addEventListener('click', function() {
+    // 改进关闭菜单的逻辑
+    document.addEventListener('click', function(e) {
+        if (!menu.contains(e.target)) {
+            menu.style.display = 'none';
+        }
+    });
+
+    // 添加滚动时关闭菜单
+    window.addEventListener('scroll', function() {
         menu.style.display = 'none';
     });
 }
