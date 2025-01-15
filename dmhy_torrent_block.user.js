@@ -2,7 +2,7 @@
 // @name:zh-CN   动漫花园种子屏蔽助手
 // @name         DMHY Torrent Block
 // @namespace    https://github.com/xkbkx5904
-// @version      1.1.0
+// @version      1.1.1
 // @author       xkbkx5904
 // @description  Enhanced version of DMHY Block script with more features: UI management, regex filtering, context menu, and ad blocking
 // @description:zh-CN  增强版的动漫花园资源屏蔽工具，支持用户界面管理、正则表达式过滤、右键菜单和广告屏蔽等功能
@@ -19,6 +19,22 @@
 // @originalURL  https://greasyfork.org/zh-CN/scripts/36871-dmhy-block
 // @icon         https://share.dmhy.org/favicon.ico
 // ==/UserScript==
+
+/*
+更新日志：
+v1.1.1
+- 修复数字ID选择器的兼容性问题
+- 优化广告屏蔽性能和时机
+- 改进广告选择器的精确度
+- 统一广告和PikPak按钮的处理逻辑
+
+v1.1.0
+- 初始版本发布
+- 支持用户界面管理
+- 支持正则表达式过滤
+- 支持右键菜单
+- 支持广告屏蔽
+*/
 
 /**
  * 全局配置对象
@@ -552,43 +568,73 @@ class AdBlocker {
      * 初始化广告拦截
      */
     static init() {
-        this.initAdBlock();
+        // 1. 立即执行一次
+        this.hideAds();
+        
+        // 2. DOMContentLoaded 时执行
+        document.addEventListener('DOMContentLoaded', () => {
+            this.hideAds();
+        });
+        
+        // 3. 使用 MutationObserver 实时监控
         this.initDOMObserver();
+        
+        // 4. 兜底方案，页面加载完成后再次检查
+        window.addEventListener('load', () => {
+            this.hideAds();
+        });
     }
 
     /**
-     * 初始化广告屏蔽
+     * 初始化DOM观察器
      */
-    static initAdBlock() {
-        setTimeout(() => {
-            this.hideAds();
-        }, 100);
+    static initDOMObserver() {
+        // 配置 MutationObserver 选项
+        const config = {
+            childList: true,    // 监听子节点变化
+            subtree: true,      // 监听所有后代节点
+            attributes: true,   // 监听属性变化
+        };
+
+        // 创建观察器实例
+        const observer = new MutationObserver((mutations) => {
+            // 优化性能：使用 requestAnimationFrame 避免频繁执行
+            window.requestAnimationFrame(() => {
+                this.hideAds();
+            });
+        });
+
+        // 开始观察
+        observer.observe(document.documentElement, config);
     }
 
     /**
      * 隐藏广告元素
      */
     static hideAds() {
-        CONFIG.selectors.adSelectors.forEach(selector => {
-            document.querySelectorAll(selector).forEach(element => {
-                if (element) {
-                    element.style.display = 'none';
-                }
-            });
-        });
-    }
+        // 添加样式规则以提前隐藏广告
+        if (!document.getElementById('dmhy-ad-styles')) {
+            const style = document.createElement('style');
+            style.id = 'dmhy-ad-styles';
+            style.textContent = CONFIG.selectors.adSelectors
+                .map(selector => `${selector} { display: none !important; }`)
+                .join('\n');
+            document.head.appendChild(style);
+        }
 
-    /**
-     * 初始化DOM观察器，用于处理动态加载的广告
-     */
-    static initDOMObserver() {
-        const observer = new MutationObserver(() => {
-            this.hideAds();
-        });
-        
-        observer.observe(document.body, {
-            childList: true,
-            subtree: true
+        // 仍然保留 DOM 操作以确保完全隐藏
+        CONFIG.selectors.adSelectors.forEach(selector => {
+            try {
+                document.querySelectorAll(selector).forEach(element => {
+                    if (element) {
+                        element.style.setProperty('display', 'none', 'important');
+                        // 可选：移除元素以彻底阻止加载
+                        // element.remove();
+                    }
+                });
+            } catch (error) {
+                ErrorHandler.handle(error, 'AdBlocker.hideAds');
+            }
         });
     }
 }
@@ -629,6 +675,10 @@ class App {
      */
     static async init() {
         try {
+            // 优先初始化广告拦截
+            AdBlocker.init();
+            
+            // 其他初始化
             const blockListManager = new BlockListManager();
             await blockListManager.init();
             
@@ -639,8 +689,6 @@ class App {
             uiManager.init();
             filterManager.init();
             eventManager.init();
-            
-            window.addEventListener('load', () => AdBlocker.init());
             
         } catch (error) {
             ErrorHandler.handle(error, 'App.init');
