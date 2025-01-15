@@ -2,7 +2,7 @@
 // @name:zh-CN   动漫花园种子屏蔽助手
 // @name         DMHY Torrent Block
 // @namespace    https://github.com/xkbkx5904
-// @version      1.0.4
+// @version      1.1.0
 // @author       xkbkx5904
 // @description  Enhanced version of DMHY Block script with more features: UI management, regex filtering, context menu, and ad blocking
 // @description:zh-CN  增强版的动漫花园资源屏蔽工具，支持用户界面管理、正则表达式过滤、右键菜单和广告屏蔽等功能
@@ -20,193 +20,447 @@
 // @icon         https://share.dmhy.org/favicon.ico
 // ==/UserScript==
 
-// 用户黑名单列表，存储被屏蔽的用户信息和关键词
-let UserBlockList = [];
+/**
+ * 全局配置对象
+ */
+const CONFIG = {
+    // 存储相关配置
+    storage: {
+        blockListKey: 'dmhy_blocklist'
+    },
+    
+    // DOM选择器配置
+    selectors: {
+        torrentList: "table#topic_list tbody tr",
+        userLink: "td:last-child a[href*='/user_id/']",
+        titleCell: "td.title",
+        adSelectors: [
+            // 精确定位广告容器（修复 ID 选择器）
+            '[id="1280_adv"]',
+            '[id="pkpk"]',
+            '.kiwi-ad-wrapper-1280x120',
+            
+            // 广告追踪相关
+            'a[onclick*="_trackEvent"][onclick*="ad"]',
+            
+            // PikPak 相关
+            'a[href*="mypikpak.com/drive/url-checker"]',
+            
+            // 特定广告图片
+            'div[align="center"] > a[href*="sng.link"] > img',
+            'div[align="center"] > a[href*="weidian.com"] > img[src*="/1280pik.png"]',
+            'img[src*="/VA"][src*=".gif"]'
+        ]
+    },
+    
+    // UI相关样式配置
+    styles: {
+        notification: `
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 4px;
+            z-index: 10001;
+            font-size: 14px;
+            transition: opacity 0.3s;
+        `,
+        blocklistUI: `
+            position: fixed;
+            left: 10px;
+            top: 10px;
+            z-index: 9999;
+        `,
+        manager: `
+            position: fixed;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%,-50%);
+            background: white;
+            padding: 20px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            z-index: 10000;
+            width: 500px;
+            max-height: 80vh;
+            overflow-y: auto;
+        `
+    }
+};
 
-// 从本地存储加载黑名单
-function loadBlockList() {
-    try {
-        const saved = GM_getValue('dmhy_blocklist', []);
-        UserBlockList = Array.isArray(saved) ? saved.map(item => {
-            if (item.type === 'keywords') {
-                return {
-                    type: 'keywords',
-                    values: item.values.map(k => {
-                        if (typeof k === 'string' && k.startsWith('/') && k.endsWith('/')) {
-                            try {
-                                return new RegExp(k.slice(1, -1));
-                            } catch (e) {
-                                return k;
-                            }
-                        }
-                        return k;
-                    })
-                };
-            }
-            return item;
-        }) : [];
-    } catch (err) {
-        UserBlockList = [];
+/**
+ * 错误处理类
+ */
+class ErrorHandler {
+    /**
+     * 处理错误
+     * @param {Error} error - 错误对象
+     * @param {string} context - 错误发生的上下文
+     */
+    static handle(error, context) {
+        console.warn(`[DMHY Block] Error in ${context}:`, error);
     }
 }
 
-// 保存黑名单到本地存储
-function saveBlockList() {
-    try {
-        const listToSave = UserBlockList.map(item => {
+/**
+ * 通知管理类
+ */
+class NotificationManager {
+    /**
+     * 显示通知
+     * @param {string} message - 通知消息
+     */
+    static show(message) {
+        const notification = document.createElement('div');
+        notification.style.cssText = CONFIG.styles.notification;
+        notification.textContent = message;
+        document.body.appendChild(notification);
+
+        setTimeout(() => {
+            notification.style.opacity = '0';
+            setTimeout(() => notification.remove(), 300);
+        }, 2000);
+    }
+}
+
+/**
+ * 黑名单管理类
+ */
+class BlockListManager {
+    constructor() {
+        this.blockList = [];
+    }
+
+    /**
+     * 初始化黑名单
+     */
+    async init() {
+        await this.loadBlockList();
+    }
+
+    /**
+     * 从存储加载黑名单
+     */
+    async loadBlockList() {
+        try {
+            const saved = GM_getValue(CONFIG.storage.blockListKey, []);
+            this.blockList = Array.isArray(saved) ? this.parseBlockList(saved) : [];
+        } catch (error) {
+            ErrorHandler.handle(error, 'BlockListManager.loadBlockList');
+            this.blockList = [];
+        }
+    }
+
+    /**
+     * 解析黑名单数据
+     * @param {Array} saved - 保存的黑名单数据
+     */
+    parseBlockList(saved) {
+        return saved.map(item => {
             if (item.type === 'keywords') {
                 return {
                     type: 'keywords',
-                    values: item.values.map(k => {
-                        if (k instanceof RegExp) {
-                            return `/${k.source}/`;
-                        }
-                        return k;
-                    })
+                    values: item.values.map(this.parseKeyword)
                 };
             }
             return item;
         });
-        GM_setValue('dmhy_blocklist', listToSave);
-    } catch (err) {
-        // 静默处理错误
     }
-}
 
-// 根据黑名单过滤资源列表
-function RemoveTorrentInBlockList() {
-    try {
-        // 先恢复所有被隐藏的条目
-        const hiddenItems = document.querySelectorAll("table#topic_list tbody tr[style*='display: none']");
-        hiddenItems.forEach(elem => {
-            elem.style.display = '';
-        });
-
-        // 如果黑名单为空，直接返回
-        if (!UserBlockList.length) return;
-
-        // 获取黑名单用户ID和关键词
-        const blockedUserIds = UserBlockList.find(item => item.type === 'userId')?.values || [];
-        const blockedKeywords = UserBlockList.find(item => item.type === 'keywords')?.values || [];
-
-        // 如果没有任何屏蔽规则，直接返回
-        if (!blockedUserIds.length && !blockedKeywords.length) return;
-
-        const tableList = document.querySelectorAll("table#topic_list tbody tr");
-        tableList.forEach(elem => {
+    /**
+     * 解析关键词
+     * @param {string} keyword - 关键词
+     */
+    parseKeyword(keyword) {
+        if (typeof keyword === 'string' && keyword.startsWith('/') && keyword.endsWith('/')) {
             try {
-                const titleCell = elem.querySelector("td.title");
-                const title = titleCell ? Array.from(titleCell.childNodes)
-                    .map(node => node.textContent?.trim())
-                    .filter(text => text)
-                    .join(' ') : '';
+                return new RegExp(keyword.slice(1, -1));
+            } catch (e) {
+                return keyword;
+            }
+        }
+        return keyword;
+    }
 
-                const idMatch = elem.querySelector("td:last-child a[href*='/user_id/']")?.href?.match(/user_id\/(\d+)/);
+    /**
+     * 保存黑名单到存储
+     */
+    saveBlockList() {
+        try {
+            const listToSave = this.blockList.map(item => ({
+                ...item,
+                values: item.type === 'keywords' 
+                    ? item.values.map(k => k instanceof RegExp ? `/${k.source}/` : k)
+                    : item.values
+            }));
+            GM_setValue(CONFIG.storage.blockListKey, listToSave);
+        } catch (error) {
+            ErrorHandler.handle(error, 'BlockListManager.saveBlockList');
+        }
+    }
 
-                if (!title || !idMatch) return;
+    /**
+     * 添加用户到黑名单
+     * @param {number} userId - 用户ID
+     */
+    addUser(userId) {
+        if (!userId || isNaN(userId)) return false;
+        
+        const userIdList = this.getUserIds();
+        if (!userIdList.includes(userId)) {
+            this.updateBlockList('userId', [...userIdList, userId]);
+            return true;
+        }
+        return false;
+    }
 
-                const id = parseInt(idMatch[1]);
-                let remove = false;
+    /**
+     * 获取黑名单用户ID列表
+     */
+    getUserIds() {
+        return this.blockList.find(item => item.type === 'userId')?.values || [];
+    }
 
-                // 检查用户ID是否在黑名单中
-                if (blockedUserIds.includes(id)) {
-                    remove = true;
-                }
+    /**
+     * 获取黑名单关键词列表
+     */
+    getKeywords() {
+        return this.blockList.find(item => item.type === 'keywords')?.values || [];
+    }
 
-                // 检查标题是否包含黑名单关键词
-                if (!remove && blockedKeywords.length > 0) {
-                    for (const keyword of blockedKeywords) {
-                        if (typeof keyword === 'string') {
-                            if (title.toLowerCase().includes(keyword.toLowerCase())) {
-                                remove = true;
-                                break;
-                            }
-                        } else if (keyword instanceof RegExp) {
-                            if (title.match(keyword)) {
-                                remove = true;
-                                break;
-                            }
-                        }
-                    }
-                }
+    /**
+     * 更新黑名单
+     * @param {string} type - 黑名单类型
+     * @param {Array} values - 黑名单值
+     */
+    updateBlockList(type, values) {
+        const index = this.blockList.findIndex(item => item.type === type);
+        if (index >= 0) {
+            this.blockList[index].values = values;
+        } else {
+            this.blockList.push({ type, values });
+        }
+        this.saveBlockList();
+    }
+}
 
-                // 隐藏匹配的资源条目
-                if (remove) {
+/**
+ * 过滤管理类
+ */
+class FilterManager {
+    constructor(blockListManager) {
+        this.blockListManager = blockListManager;
+    }
+
+    /**
+     * 初始化过滤器
+     */
+    init() {
+        this.applyFilters();
+    }
+
+    /**
+     * 应用过滤规则
+     */
+    applyFilters() {
+        try {
+            this.resetHiddenItems();
+            
+            if (!this.blockListManager.blockList.length) return;
+            
+            const blockedUserIds = this.blockListManager.getUserIds();
+            const blockedKeywords = this.blockListManager.getKeywords();
+            
+            if (!blockedUserIds.length && !blockedKeywords.length) return;
+            
+            this.filterTorrentList(blockedUserIds, blockedKeywords);
+        } catch (error) {
+            ErrorHandler.handle(error, 'FilterManager.applyFilters');
+        }
+    }
+
+    /**
+     * 重置隐藏的项目
+     */
+    resetHiddenItems() {
+        document.querySelectorAll(`${CONFIG.selectors.torrentList}[style*='display: none']`)
+            .forEach(elem => elem.style.display = '');
+    }
+
+    /**
+     * 过滤种子列表
+     * @param {Array} blockedUserIds - 被屏蔽的用户ID
+     * @param {Array} blockedKeywords - 被屏蔽的关键词
+     */
+    filterTorrentList(blockedUserIds, blockedKeywords) {
+        document.querySelectorAll(CONFIG.selectors.torrentList).forEach(elem => {
+            try {
+                const { title, userId } = this.extractItemInfo(elem);
+                if (!title || !userId) return;
+                
+                if (this.shouldHideItem(userId, title, blockedUserIds, blockedKeywords)) {
                     elem.style.display = 'none';
                 }
-            } catch (err) {
-                // 静默处理单条资源的处理错误
+            } catch (error) {
+                ErrorHandler.handle(error, 'FilterManager.filterTorrentList.item');
             }
         });
-    } catch (err) {
-        // 静默处理整体过滤错误
+    }
+
+    /**
+     * 提取项目信息
+     * @param {Element} elem - DOM元素
+     */
+    extractItemInfo(elem) {
+        const titleCell = elem.querySelector(CONFIG.selectors.titleCell);
+        const title = titleCell ? Array.from(titleCell.childNodes)
+            .map(node => node.textContent?.trim())
+            .filter(text => text)
+            .join(' ') : '';
+            
+        const idMatch = elem.querySelector(CONFIG.selectors.userLink)?.href?.match(/user_id\/(\d+)/);
+        const userId = idMatch ? parseInt(idMatch[1]) : null;
+        
+        return { title, userId };
+    }
+
+    /**
+     * 判断是否应该隐藏项目
+     * @param {number} userId - 用户ID
+     * @param {string} title - 标题
+     * @param {Array} blockedUserIds - 被屏蔽的用户ID
+     * @param {Array} blockedKeywords - 被屏蔽的关键词
+     */
+    shouldHideItem(userId, title, blockedUserIds, blockedKeywords) {
+        if (blockedUserIds.includes(userId)) return true;
+        
+        return blockedKeywords.some(keyword => {
+            if (typeof keyword === 'string') {
+                return title.toLowerCase().includes(keyword.toLowerCase());
+            }
+            return keyword instanceof RegExp && title.match(keyword);
+        });
     }
 }
 
-// UI相关函数
-function addBlocklistUI() {
-    const uiHtml = `
-        <div id="dmhy-blocklist-ui" style="position:fixed;left:10px;top:10px;z-index:9999;">
-            <button id="show-blocklist">管理种子黑名单</button>
-        </div>
-    `;
-    document.body.insertAdjacentHTML('beforeend', uiHtml);
+/**
+ * UI管理类
+ */
+class UIManager {
+    constructor(blockListManager, filterManager) {
+        this.blockListManager = blockListManager;
+        this.filterManager = filterManager;
+    }
 
-    document.getElementById('show-blocklist')?.addEventListener('click', showBlocklistManager);
-}
+    /**
+     * 初始化UI
+     */
+    init() {
+        this.addBlocklistUI();
+        this.addContextMenu();
+    }
 
-function showBlocklistManager() {
-    const managerHtml = `
-        <div id="blocklist-manager" style="position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);
-            background:white;padding:20px;border:1px solid #ccc;border-radius:5px;z-index:10000;
-            width:500px;max-height:80vh;overflow-y:auto;">
-            <h3 style="margin-top:0;">管理种子黑名单</h3>
-            <div style="margin-bottom:10px;">
-                <label>用户ID（用分号分隔）：</label><br>
-                <textarea id="user-ids" style="width:100%;height:100px;margin-top:5px;resize:none;"></textarea>
+    /**
+     * 添加黑名单UI
+     */
+    addBlocklistUI() {
+        const uiHtml = `
+            <div id="dmhy-blocklist-ui" style="${CONFIG.styles.blocklistUI}">
+                <button id="show-blocklist">管理种子黑名单</button>
             </div>
-            <div style="margin-bottom:10px;">
-                <label>标题关键词（用分号分隔）：</label><br>
-                <textarea id="keywords" style="width:100%;height:100px;margin-top:5px;resize:none;"></textarea>
-            </div>
-            <div style="display:flex;justify-content:space-between;color:#666;font-size:12px;margin-top:5px;">
-                <div style="flex:1;margin-right:10px;">
-                    提示：支持普通关键词和正则表达式<br>
-                    - 普通关键词直接输入，用分号分隔<br>
-                    - 正则表达式用 / 包裹，例如：/\\d+话/<br>
-                    - 示例：关键词1；/\\d+话/；关键词2
+        `;
+        document.body.insertAdjacentHTML('beforeend', uiHtml);
+        
+        document.getElementById('show-blocklist')?.addEventListener('click', 
+            () => this.showBlocklistManager());
+    }
+
+    /**
+     * 显示黑名单管理界面
+     */
+    showBlocklistManager() {
+        const managerHtml = `
+            <div id="blocklist-manager" style="${CONFIG.styles.manager}">
+                <h3 style="margin-top:0;">管理种子黑名单</h3>
+                <div style="margin-bottom:10px;">
+                    <label>用户ID（用分号分隔）：</label><br>
+                    <textarea id="user-ids" style="width:100%;height:100px;margin-top:5px;resize:none;"></textarea>
                 </div>
-                <div style="flex:1;margin-left:10px;">
-                    提示：用户ID获取方式：<br>
-                    - 在用户名上右键点击，选择"添加用户到黑名单"<br>
-                    - 或点击用户名，从URL中获取数字ID
+                <div style="margin-bottom:10px;">
+                    <label>标题关键词（用分号分隔）：</label><br>
+                    <textarea id="keywords" style="width:100%;height:100px;margin-top:5px;resize:none;"></textarea>
+                </div>
+                <div style="display:flex;justify-content:space-between;color:#666;font-size:12px;margin-top:5px;">
+                    <div style="flex:1;margin-right:10px;">
+                        提示：支持普通关键词和正则表达式<br>
+                        - 普通关键词直接输入，用分号分隔<br>
+                        - 正则表达式用 / 包裹，例如：/\\d+话/<br>
+                        - 示例：关键词1；/\\d+话/；关键词2
+                    </div>
+                    <div style="flex:1;margin-left:10px;">
+                        提示：用户ID获取方式：<br>
+                        - 在用户名上右键点击，选择"添加用户到黑名单"<br>
+                        - 或点击用户名，从URL中获取数字ID
+                    </div>
+                </div>
+                <div style="margin-top:10px;text-align:right;">
+                    <button id="save-blocklist">保存</button>
+                    <button id="close-manager">关闭</button>
                 </div>
             </div>
-            <div style="margin-top:10px;text-align:right;">
-                <button id="save-blocklist">保存</button>
-                <button id="close-manager">关闭</button>
-            </div>
-        </div>
-        <div id="blocklist-overlay" style="position:fixed;top:0;left:0;right:0;bottom:0;
-            background:rgba(0,0,0,0.5);z-index:9999;"></div>
-    `;
+            <div id="blocklist-overlay" style="position:fixed;top:0;left:0;right:0;bottom:0;
+                background:rgba(0,0,0,0.5);z-index:9999;"></div>
+        `;
 
-    document.body.insertAdjacentHTML('beforeend', managerHtml);
+        document.body.insertAdjacentHTML('beforeend', managerHtml);
+        this.initManagerEvents();
+        this.fillManagerData();
+    }
 
-    // 填充现有数据
-    const userIds = UserBlockList.find(item => item.type === 'userId')?.values || [];
-    const keywords = UserBlockList.find(item => item.type === 'keywords')?.values || [];
+    /**
+     * 初始化管理器事件
+     */
+    initManagerEvents() {
+        const closeManager = () => {
+            document.getElementById('blocklist-manager')?.remove();
+            document.getElementById('blocklist-overlay')?.remove();
+        };
 
-    document.getElementById('user-ids').value = userIds.join('；');
-    document.getElementById('keywords').value = keywords.map(k => {
-        if (k instanceof RegExp) {
-            return `/${k.source}/`;
-        }
-        return k;
-    }).join('；');
+        document.getElementById('save-blocklist')?.addEventListener('click', () => {
+            this.saveManagerData();
+            closeManager();
+            this.filterManager.applyFilters();
+        });
 
-    // 保存更新
-    document.getElementById('save-blocklist')?.addEventListener('click', () => {
+        document.getElementById('close-manager')?.addEventListener('click', closeManager);
+        document.getElementById('blocklist-overlay')?.addEventListener('click', e => {
+            if (e.target === e.currentTarget) closeManager();
+        });
+    }
+
+    /**
+     * 填充管理器数据
+     */
+    fillManagerData() {
+        const userIds = this.blockListManager.getUserIds();
+        const keywords = this.blockListManager.getKeywords();
+
+        document.getElementById('user-ids').value = userIds.join('；');
+        document.getElementById('keywords').value = keywords.map(k => {
+            if (k instanceof RegExp) {
+                return `/${k.source}/`;
+            }
+            return k;
+        }).join('；');
+    }
+
+    /**
+     * 保存管理器数据
+     */
+    saveManagerData() {
         const newUserIds = document.getElementById('user-ids').value
             .split(/[;；]/)
             .map(id => id.trim())
@@ -228,185 +482,174 @@ function showBlocklistManager() {
                 return k;
             });
 
-        UserBlockList = [
-            { type: 'userId', values: newUserIds },
-            { type: 'keywords', values: newKeywords }
-        ];
-
-        saveBlockList();
-        closeManager();
-        RemoveTorrentInBlockList();
-    });
-
-    // 关闭管理界面
-    function closeManager() {
-        document.getElementById('blocklist-manager')?.remove();
-        document.getElementById('blocklist-overlay')?.remove();
+        this.blockListManager.updateBlockList('userId', newUserIds);
+        this.blockListManager.updateBlockList('keywords', newKeywords);
     }
 
-    document.getElementById('close-manager')?.addEventListener('click', closeManager);
-    document.getElementById('blocklist-overlay')?.addEventListener('click', e => {
-        if (e.target === e.currentTarget) closeManager();
-    });
-}
-
-// 添加右键菜单功能
-function addContextMenu() {
-    // 创建右键菜单元素
-    const menuHtml = `
-        <div id="dmhy-context-menu" style="display:none;position:fixed;background:white;
-            border:1px solid #ccc;border-radius:3px;padding:5px;box-shadow:2px 2px 5px rgba(0,0,0,0.2);z-index:10000;">
-            <div id="block-user" style="padding:5px 10px;cursor:pointer;hover:background-color:#f0f0f0;">
-                添加用户到黑名单
+    /**
+     * 添加右键菜单
+     */
+    addContextMenu() {
+        const menuHtml = `
+            <div id="dmhy-context-menu" style="display:none;position:fixed;background:white;
+                border:1px solid #ccc;border-radius:3px;padding:5px;box-shadow:2px 2px 5px rgba(0,0,0,0.2);z-index:10000;">
+                <div id="block-user" style="padding:5px 10px;cursor:pointer;hover:background-color:#f0f0f0;">
+                    添加用户到黑名单
+                </div>
             </div>
-        </div>
-    `;
-    document.body.insertAdjacentHTML('beforeend', menuHtml);
+        `;
+        document.body.insertAdjacentHTML('beforeend', menuHtml);
+        this.initContextMenuEvents();
+    }
 
-    const menu = document.getElementById('dmhy-context-menu');
+    /**
+     * 初始化右键菜单事件
+     */
+    initContextMenuEvents() {
+        const menu = document.getElementById('dmhy-context-menu');
 
-    // 为所有用户ID链接添加右键事件
-    document.addEventListener('contextmenu', function(e) {
-        const userLink = e.target.closest('a[href*="/user_id/"]');
-        if (userLink) {
-            e.preventDefault();
-            const userId = userLink.href.match(/user_id\/(\d+)/)?.[1];
-            if (userId) {
-                menu.style.display = 'block';
-                menu.style.left = e.clientX + 'px';
-                menu.style.top = e.clientY + 'px';
-                
-                const blockUserOption = document.getElementById('block-user');
-                blockUserOption.onclick = function(e) {
-                    e.stopPropagation();
-                    addUserToBlocklist(parseInt(userId));
-                    menu.style.display = 'none';
-                };
+        document.addEventListener('contextmenu', e => {
+            const userLink = e.target.closest(CONFIG.selectors.userLink);
+            if (userLink) {
+                e.preventDefault();
+                const userId = userLink.href.match(/user_id\/(\d+)/)?.[1];
+                if (userId) {
+                    menu.style.display = 'block';
+                    menu.style.left = e.clientX + 'px';
+                    menu.style.top = e.clientY + 'px';
+                    
+                    document.getElementById('block-user').onclick = e => {
+                        e.stopPropagation();
+                        if (this.blockListManager.addUser(parseInt(userId))) {
+                            NotificationManager.show('已将用户ID: ' + userId + ' 添加到黑名单');
+                            this.filterManager.applyFilters();
+                        } else {
+                            NotificationManager.show('该用户已在黑名单中');
+                        }
+                        menu.style.display = 'none';
+                    };
+                }
             }
-        }
-    });
+        });
 
-    // 改进关闭菜单的逻辑
-    document.addEventListener('click', function(e) {
-        if (!menu.contains(e.target)) {
+        document.addEventListener('click', e => {
+            if (!menu.contains(e.target)) {
+                menu.style.display = 'none';
+            }
+        });
+
+        window.addEventListener('scroll', () => {
             menu.style.display = 'none';
-        }
-    });
-
-    // 添加滚动时关闭菜单
-    window.addEventListener('scroll', function() {
-        menu.style.display = 'none';
-    });
-}
-
-// 添加通知提示函数
-function showNotification(message) {
-    const notification = document.createElement('div');
-    notification.style.cssText = `
-        position: fixed;
-        top: 20px;
-        left: 50%;
-        transform: translateX(-50%);
-        background: rgba(0, 0, 0, 0.8);
-        color: white;
-        padding: 10px 20px;
-        border-radius: 4px;
-        z-index: 10001;
-        font-size: 14px;
-        transition: opacity 0.3s;
-    `;
-    notification.textContent = message;
-    document.body.appendChild(notification);
-
-    // 2秒后自动消失
-    setTimeout(() => {
-        notification.style.opacity = '0';
-        setTimeout(() => notification.remove(), 300);
-    }, 2000);
-}
-
-// 添加用户到黑名单
-function addUserToBlocklist(userId) {
-    if (!userId || isNaN(userId)) return;
-    
-    const userIdList = UserBlockList.find(item => item.type === 'userId')?.values || [];
-    if (!userIdList.includes(userId)) {
-        // 如果没有userId类型的项，添加一个
-        const userIdItem = UserBlockList.find(item => item.type === 'userId');
-        if (userIdItem) {
-            userIdItem.values.push(userId);
-        } else {
-            UserBlockList.push({ type: 'userId', values: [userId] });
-        }
-        
-        saveBlockList();
-        RemoveTorrentInBlockList();
-        
-        // 显示通知
-        showNotification('已将用户ID: ' + userId + ' 添加到黑名单');
-    } else {
-        showNotification('该用户已在黑名单中');
+        });
     }
 }
 
-// 初始化
+/**
+ * 广告拦截类
+ */
+class AdBlocker {
+    /**
+     * 初始化广告拦截
+     */
+    static init() {
+        this.initAdBlock();
+        this.initDOMObserver();
+    }
+
+    /**
+     * 初始化广告屏蔽
+     */
+    static initAdBlock() {
+        setTimeout(() => {
+            this.hideAds();
+        }, 100);
+    }
+
+    /**
+     * 隐藏广告元素
+     */
+    static hideAds() {
+        CONFIG.selectors.adSelectors.forEach(selector => {
+            document.querySelectorAll(selector).forEach(element => {
+                if (element) {
+                    element.style.display = 'none';
+                }
+            });
+        });
+    }
+
+    /**
+     * 初始化DOM观察器，用于处理动态加载的广告
+     */
+    static initDOMObserver() {
+        const observer = new MutationObserver(() => {
+            this.hideAds();
+        });
+        
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+    }
+}
+
+/**
+ * 事件管理类
+ */
+class EventManager {
+    constructor(filterManager) {
+        this.filterManager = filterManager;
+    }
+
+    /**
+     * 初始化事件
+     */
+    init() {
+        this.initSortingEvents();
+    }
+
+    /**
+     * 初始化排序事件
+     */
+    initSortingEvents() {
+        document.querySelectorAll("th.header").forEach(header => {
+            header.addEventListener('click', () => {
+                setTimeout(() => this.filterManager.applyFilters(), 100);
+            });
+        });
+    }
+}
+
+/**
+ * 应用主类
+ */
+class App {
+    /**
+     * 初始化应用
+     */
+    static async init() {
+        try {
+            const blockListManager = new BlockListManager();
+            await blockListManager.init();
+            
+            const filterManager = new FilterManager(blockListManager);
+            const uiManager = new UIManager(blockListManager, filterManager);
+            const eventManager = new EventManager(filterManager);
+            
+            uiManager.init();
+            filterManager.init();
+            eventManager.init();
+            
+            window.addEventListener('load', () => AdBlocker.init());
+            
+        } catch (error) {
+            ErrorHandler.handle(error, 'App.init');
+        }
+    }
+}
+
+// 启动应用
 (function() {
     'use strict';
-
-    // 广告处理：等待页面加载完成后执行
-    window.addEventListener('load', () => {
-        // 广告选择器：匹配各种可能的广告元素
-        const adSelectors = [
-            '#pkpk',                                              // 顶部广告
-            '[id="1280_adv"]',                                   // 1280广告位
-            'div[align="center"] img[width="1280"][height="120"]', // 通过尺寸匹配
-            'a[onclick*="_trackEvent"][onclick*="ad"]',           // 通过点击事件匹配
-            '.kiwi-ad-wrapper-1280x120'                          // 通过类名匹配
-        ];
-
-        // 延迟100ms后隐藏广告，确保广告统计正常
-        setTimeout(() => {
-            adSelectors.forEach(selector => {
-                const elements = document.querySelectorAll(selector);
-                elements.forEach(element => {
-                    if (element) {
-                        element.style.display = 'none';
-                    }
-                });
-            });
-        }, 100);
-    });
-
-    // 初始化功能
-    loadBlockList();           // 加载黑名单
-    addBlocklistUI();         // 添加管理界面
-    addContextMenu();         // 添加右键菜单功能
-
-    // 执行初次过滤
-    RemoveTorrentInBlockList();
-
-    // 监听排序操作，重新过滤资源
-    document.querySelectorAll("th.header").forEach(header => {
-        header.addEventListener('click', () => {
-            setTimeout(RemoveTorrentInBlockList, 100);
-        });
-    });
-
-    // 隐藏 PikPak 按钮
-    function hidePikPakButtons() {
-        const pikpakButtons = document.querySelectorAll('a[href*="mypikpak.com/drive/url-checker"]');
-        pikpakButtons.forEach(button => {
-            button.style.display = 'none';
-        });
-    }
-
-    // 初始执行
-    hidePikPakButtons();
-
-    // 监听 DOM 变化，处理动态加载的内容
-    const observer = new MutationObserver(hidePikPakButtons);
-    observer.observe(document.body, {
-        childList: true,
-        subtree: true
-    });
+    App.init();
 })();
