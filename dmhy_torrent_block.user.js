@@ -2,7 +2,7 @@
 // @name:zh-CN   动漫花园种子屏蔽助手
 // @name         DMHY Torrent Block
 // @namespace    https://github.com/xkbkx5904
-// @version      1.1.2
+// @version      1.1.3
 // @author       xkbkx5904
 // @description  Enhanced version of DMHY Block script with more features: UI management, regex filtering, context menu, and ad blocking
 // @description:zh-CN  增强版的动漫花园资源屏蔽工具，支持用户界面管理、正则表达式过滤、右键菜单和广告屏蔽等功能
@@ -506,11 +506,13 @@ class UIManager {
             <h3 style="margin-top:0;">管理种子黑名单</h3>
             <div style="margin-bottom:10px;">
                 <label>已屏蔽用户：</label><br>
-                <textarea id="user-ids" style="width:100%;height:100px;margin-top:5px;resize:none;">${userNames.join('；')}</textarea>
+                <textarea id="user-ids" style="width:100%;height:100px;margin-top:5px;resize:none;border:1px solid #ccc;">${userNames.join('；')}</textarea>
+                <div id="user-ids-error" style="color:red;font-size:12px;margin-top:3px;display:none;"></div>
             </div>
             <div style="margin-bottom:10px;">
                 <label>标题关键词（用分号分隔）：</label><br>
-                <textarea id="keywords" style="width:100%;height:100px;margin-top:5px;resize:none;"></textarea>
+                <textarea id="keywords" style="width:100%;height:100px;margin-top:5px;resize:none;border:1px solid #ccc;"></textarea>
+                <div id="keywords-error" style="color:red;font-size:12px;margin-top:3px;display:none;"></div>
             </div>
             <div style="display:flex;justify-content:space-between;color:#666;font-size:12px;margin-top:5px;">
                 <div style="flex:1;margin-right:10px;">
@@ -527,8 +529,8 @@ class UIManager {
                 </div>
             </div>
             <div style="margin-top:10px;text-align:right;">
-                <button id="save-blocklist">保存</button>
-                <button id="close-manager">关闭</button>
+                <button id="save-blocklist" style="padding:5px 15px;">保存</button>
+                <button id="close-manager" style="padding:5px 15px;margin-left:10px;">关闭</button>
             </div>
         `;
 
@@ -545,15 +547,39 @@ class UIManager {
             document.getElementById('blocklist-overlay')?.remove();
         };
 
+        // 修改保存按钮事件处理
         document.getElementById('save-blocklist')?.addEventListener('click', async () => {
-            await this.saveManagerData();
-            closeManager();
-            this.filterManager.applyFilters();
+            const saveResult = await this.saveManagerData();
+            if (saveResult) {  // 只有在保存成功时才关闭
+                closeManager();
+                this.filterManager.applyFilters();
+            }
         });
 
         document.getElementById('close-manager')?.addEventListener('click', closeManager);
+        
+        // 修改遮罩层点击事件
         document.getElementById('blocklist-overlay')?.addEventListener('click', e => {
-            if (e.target === e.currentTarget) closeManager();
+            if (e.target === e.currentTarget) {
+                // 在关闭前检查是否有未保存的更改
+                const userIdsChanged = this.hasUnsavedChanges();
+                if (userIdsChanged) {
+                    if (confirm('有未保存的更改，确定要关闭吗？')) {
+                        closeManager();
+                    }
+                } else {
+                    closeManager();
+                }
+            }
+        });
+
+        // 添加输入框变化事件监听
+        document.getElementById('user-ids')?.addEventListener('input', () => {
+            this.validateManagerData();
+        });
+
+        document.getElementById('keywords')?.addEventListener('input', () => {
+            this.validateManagerData();
         });
     }
 
@@ -571,9 +597,98 @@ class UIManager {
     }
 
     /**
+     * 检查是否有未保存的更改
+     */
+    hasUnsavedChanges() {
+        const currentUserIds = document.getElementById('user-ids')?.value.trim() || '';
+        const currentKeywords = document.getElementById('keywords')?.value.trim() || '';
+        
+        // 获取原始数据进行比较
+        const originalUserIds = this.blockListManager.getUserIds()
+            .map(id => this.blockListManager.userNameMap.get(id.toString()) || id)
+            .join('；');
+        const originalKeywords = this.blockListManager.getKeywords()
+            .map(k => k instanceof RegExp ? `/${k.source}/` : k)
+            .join('；');
+
+        return currentUserIds !== originalUserIds || currentKeywords !== originalKeywords;
+    }
+
+    /**
+     * 验证输入数据
+     */
+    validateManagerData() {
+        const userIdsInput = document.getElementById('user-ids');
+        const keywordsInput = document.getElementById('keywords');
+        const userIdsError = document.getElementById('user-ids-error');
+        const keywordsError = document.getElementById('keywords-error');
+        const saveButton = document.getElementById('save-blocklist');
+        
+        let isValid = true;
+        
+        // 重置错误状态
+        userIdsError.style.display = 'none';
+        keywordsError.style.display = 'none';
+        userIdsInput.style.borderColor = '#ccc';
+        keywordsInput.style.borderColor = '#ccc';
+        saveButton.style.borderColor = '';
+
+        // 验证用户ID
+        if (userIdsInput.value.trim()) {
+            const items = userIdsInput.value.trim().split(/[;；]/).map(item => item.trim()).filter(item => item);
+            const invalidItems = items.filter(item => {
+                return !(/^\d+$/.test(item) || /^.+\(\d+\)$/.test(item));
+            });
+
+            if (invalidItems.length > 0) {
+                userIdsError.textContent = `以下用户ID格式无效：${invalidItems.join('、')}`;
+                userIdsError.style.display = 'block';
+                userIdsInput.style.borderColor = 'red';
+                isValid = false;
+            }
+        }
+
+        // 验证关键词
+        if (keywordsInput.value.trim()) {
+            const keywords = keywordsInput.value.trim().split(/[;；]/).map(k => k.trim()).filter(k => k);
+            const invalidKeywords = keywords.filter(k => {
+                if (k.startsWith('/') && k.endsWith('/')) {
+                    try {
+                        new RegExp(k.slice(1, -1));
+                        return false;
+                    } catch (e) {
+                        return true;
+                    }
+                }
+                return false;
+            });
+
+            if (invalidKeywords.length > 0) {
+                keywordsError.textContent = `以下正则表达式格式无效：${invalidKeywords.join('、')}`;
+                keywordsError.style.display = 'block';
+                keywordsInput.style.borderColor = 'red';
+                isValid = false;
+            }
+        }
+
+        if (!isValid) {
+            saveButton.style.borderColor = 'red';
+        }
+
+        return { isValid };
+    }
+
+    /**
      * 保存管理器数据
      */
     async saveManagerData() {
+        const { isValid } = this.validateManagerData();
+        
+        if (!isValid) {
+            NotificationManager.show('请修正输入错误后再保存');
+            return false;
+        }
+
         const oldUserIds = this.blockListManager.getUserIds();
         
         // 解析新的用户ID列表
@@ -888,6 +1003,10 @@ class App {
 }
 
 // 启动应用
+(function() {
+    'use strict';
+    App.init();
+})();
 (function() {
     'use strict';
     App.init();
