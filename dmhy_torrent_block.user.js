@@ -2,7 +2,7 @@
 // @name:zh-CN   动漫花园种子屏蔽助手
 // @name         DMHY Torrent Block
 // @namespace    https://github.com/xkbkx5904
-// @version      1.1.1
+// @version      1.1.2
 // @author       xkbkx5904
 // @description  Enhanced version of DMHY Block script with more features: UI management, regex filtering, context menu, and ad blocking
 // @description:zh-CN  增强版的动漫花园资源屏蔽工具，支持用户界面管理、正则表达式过滤、右键菜单和广告屏蔽等功能
@@ -22,12 +22,23 @@
 
 /*
 更新日志：
+v1.1.2
+- 优化用户名显示和管理功能
+- 改进用户ID输入规则提示
+- 优化未完整删除的用户数据处理逻辑
+
 v1.1.1
 - 修复数字ID选择器的兼容性问题
 - 优化广告屏蔽性能和时机
 - 改进广告选择器的精确度
 - 统一广告和PikPak按钮的处理逻辑
 
+v1.1.0
+- 初始版本发布
+- 支持用户界面管理
+- 支持正则表达式过滤
+- 支持右键菜单
+- 支持广告屏蔽
 */
 
 /**
@@ -142,6 +153,7 @@ class NotificationManager {
 class BlockListManager {
     constructor() {
         this.blockList = [];
+        this.userNameMap = new Map();
     }
 
     /**
@@ -215,13 +227,18 @@ class BlockListManager {
     /**
      * 添加用户到黑名单
      * @param {number} userId - 用户ID
+     * @param {string} userName - 用户名
      */
-    addUser(userId) {
+    addUser(userId, userName) {
         if (!userId || isNaN(userId)) return false;
         
         const userIdList = this.getUserIds();
         if (!userIdList.includes(userId)) {
             this.updateBlockList('userId', [...userIdList, userId]);
+            if (userName) {
+                this.userNameMap.set(userId.toString(), userName);
+                this.saveUserNameMap();
+            }
             return true;
         }
         return false;
@@ -254,6 +271,77 @@ class BlockListManager {
             this.blockList.push({ type, values });
         }
         this.saveBlockList();
+    }
+
+    /**
+     * 保存用户名映射
+     */
+    saveUserNameMap() {
+        GM_setValue('dmhy_username_map', Object.fromEntries(this.userNameMap));
+    }
+
+    /**
+     * 加载用户名映射
+     */
+    async loadUserNameMap() {
+        const saved = GM_getValue('dmhy_username_map', {});
+        this.userNameMap = new Map(Object.entries(saved));
+    }
+
+    /**
+     * 获取用户名
+     * @param {number} userId - 用户ID
+     * @param {boolean} forceUpdate - 是否强制更新
+     */
+    async getUserName(userId, forceUpdate = false) {
+        if (!userId) return null;
+        
+        // 1. 先检查缓存
+        const cachedName = this.userNameMap.get(userId.toString());
+        if (cachedName && !forceUpdate) return cachedName;
+
+        // 2. 尝试从当前页面获取
+        const userLink = document.querySelector(`a[href="/topics/list/user_id/${userId}"]`);
+        if (userLink) {
+            const userName = userLink.textContent;
+            if (userName) {
+                this.userNameMap.set(userId.toString(), userName);
+                this.saveUserNameMap();
+                return userName;
+            }
+        }
+
+        // 3. 如果当前页面找不到,使用requestIdleCallback在空闲时从远程获取
+        return new Promise(resolve => {
+            const callback = async () => {
+                try {
+                    const response = await fetch(`https://share.dmhy.org/topics/list/user_id/${userId}`);
+                    const text = await response.text();
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(text, 'text/html');
+                    const userName = doc.querySelector(`a[href="/topics/list/user_id/${userId}"]`)?.textContent;
+                    
+                    if (userName) {
+                        this.userNameMap.set(userId.toString(), userName);
+                        this.saveUserNameMap();
+                        resolve(userName);
+                    } else {
+                        resolve(userId.toString());
+                    }
+                } catch (error) {
+                    ErrorHandler.handle(error, 'BlockListManager.getUserName');
+                    resolve(userId.toString());
+                }
+            };
+
+            // 使用requestIdleCallback在浏览器空闲时执行
+            if (window.requestIdleCallback) {
+                requestIdleCallback(() => callback(), { timeout: 5000 });
+            } else {
+                // 降级方案：使用setTimeout
+                setTimeout(callback, 0);
+            }
+        });
     }
 }
 
@@ -391,41 +479,59 @@ class UIManager {
     /**
      * 显示黑名单管理界面
      */
-    showBlocklistManager() {
-        const managerHtml = `
+    async showBlocklistManager() {
+        const loadingHtml = `
             <div id="blocklist-manager" style="${CONFIG.styles.manager}">
                 <h3 style="margin-top:0;">管理种子黑名单</h3>
-                <div style="margin-bottom:10px;">
-                    <label>用户ID（用分号分隔）：</label><br>
-                    <textarea id="user-ids" style="width:100%;height:100px;margin-top:5px;resize:none;"></textarea>
-                </div>
-                <div style="margin-bottom:10px;">
-                    <label>标题关键词（用分号分隔）：</label><br>
-                    <textarea id="keywords" style="width:100%;height:100px;margin-top:5px;resize:none;"></textarea>
-                </div>
-                <div style="display:flex;justify-content:space-between;color:#666;font-size:12px;margin-top:5px;">
-                    <div style="flex:1;margin-right:10px;">
-                        提示：支持普通关键词和正则表达式<br>
-                        - 普通关键词直接输入，用分号分隔<br>
-                        - 正则表达式用 / 包裹，例如：/\\d+话/<br>
-                        - 示例：关键词1；/\\d+话/；关键词2
-                    </div>
-                    <div style="flex:1;margin-left:10px;">
-                        提示：用户ID获取方式：<br>
-                        - 在用户名上右键点击，选择"添加用户到黑名单"<br>
-                        - 或点击用户名，从URL中获取数字ID
-                    </div>
-                </div>
-                <div style="margin-top:10px;text-align:right;">
-                    <button id="save-blocklist">保存</button>
-                    <button id="close-manager">关闭</button>
+                <div style="text-align:center;padding:20px;">
+                    正在加载用户信息...
                 </div>
             </div>
             <div id="blocklist-overlay" style="position:fixed;top:0;left:0;right:0;bottom:0;
                 background:rgba(0,0,0,0.5);z-index:9999;"></div>
         `;
+        document.body.insertAdjacentHTML('beforeend', loadingHtml);
 
-        document.body.insertAdjacentHTML('beforeend', managerHtml);
+        // 获取所有用户名
+        const userIds = this.blockListManager.getUserIds();
+        const userNames = await Promise.all(
+            userIds.map(async id => {
+                const name = await this.blockListManager.getUserName(id);
+                return name ? `${name}(${id})` : id;
+            })
+        );
+
+        // 更新界面
+        document.getElementById('blocklist-manager').innerHTML = `
+            <h3 style="margin-top:0;">管理种子黑名单</h3>
+            <div style="margin-bottom:10px;">
+                <label>已屏蔽用户：</label><br>
+                <textarea id="user-ids" style="width:100%;height:100px;margin-top:5px;resize:none;">${userNames.join('；')}</textarea>
+            </div>
+            <div style="margin-bottom:10px;">
+                <label>标题关键词（用分号分隔）：</label><br>
+                <textarea id="keywords" style="width:100%;height:100px;margin-top:5px;resize:none;"></textarea>
+            </div>
+            <div style="display:flex;justify-content:space-between;color:#666;font-size:12px;margin-top:5px;">
+                <div style="flex:1;margin-right:10px;">
+                    提示：支持普通关键词和正则表达式<br>
+                    - 普通关键词直接输入，用分号分隔<br>
+                    - 正则表达式用 / 包裹，例如：/\\d+话/<br>
+                    - 示例：关键词1；/\\d+话/；关键词2
+                </div>
+                <div style="flex:1;margin-left:10px;">
+                    提示：用户ID输入规则：<br>
+                    - 支持纯数字ID，如：123456<br>
+                    - 支持用户名(ID)格式，如：用户名(123456)<br>
+                    - 多个ID之间用分号分隔
+                </div>
+            </div>
+            <div style="margin-top:10px;text-align:right;">
+                <button id="save-blocklist">保存</button>
+                <button id="close-manager">关闭</button>
+            </div>
+        `;
+
         this.initManagerEvents();
         this.fillManagerData();
     }
@@ -439,8 +545,8 @@ class UIManager {
             document.getElementById('blocklist-overlay')?.remove();
         };
 
-        document.getElementById('save-blocklist')?.addEventListener('click', () => {
-            this.saveManagerData();
+        document.getElementById('save-blocklist')?.addEventListener('click', async () => {
+            await this.saveManagerData();
             closeManager();
             this.filterManager.applyFilters();
         });
@@ -455,10 +561,7 @@ class UIManager {
      * 填充管理器数据
      */
     fillManagerData() {
-        const userIds = this.blockListManager.getUserIds();
         const keywords = this.blockListManager.getKeywords();
-
-        document.getElementById('user-ids').value = userIds.join('；');
         document.getElementById('keywords').value = keywords.map(k => {
             if (k instanceof RegExp) {
                 return `/${k.source}/`;
@@ -470,13 +573,58 @@ class UIManager {
     /**
      * 保存管理器数据
      */
-    saveManagerData() {
-        const newUserIds = document.getElementById('user-ids').value
+    async saveManagerData() {
+        const oldUserIds = this.blockListManager.getUserIds();
+        
+        // 解析新的用户ID列表
+        const userIdsInput = document.getElementById('user-ids').value
             .split(/[;；]/)
-            .map(id => id.trim())
-            .filter(id => id && !isNaN(id))
-            .map(id => parseInt(id));
+            .map(item => item.trim())
+            .filter(item => item);
 
+        // 分离有效和无效的输入项
+        const validIds = [];
+        const invalidItems = [];
+        const retainedIds = []; // 存储需要保留的ID
+        
+        userIdsInput.forEach(item => {
+            // 规则1：纯数字ID
+            if (/^\d+$/.test(item)) {
+                validIds.push(parseInt(item));
+                return;
+            }
+            
+            // 规则2：用户名(数字ID)格式
+            const idMatch = item.match(/^.+\((\d+)\)$/);
+            if (idMatch && /^\d+$/.test(idMatch[1])) {
+                validIds.push(parseInt(idMatch[1]));
+                return;
+            }
+            
+            // 检查是否为未完整删除的已保存数据
+            const partialMatch = item.match(/\((\d+)/); // 匹配不完整的格式，如 "用户名(123"
+            if (partialMatch) {
+                const partialId = parseInt(partialMatch[1]);
+                if (oldUserIds.includes(partialId)) {
+                    retainedIds.push(partialId);
+                    invalidItems.push(`${item} (已保留原数据)`);
+                    return;
+                }
+            }
+            
+            // 不符合任何规则的输入项
+            invalidItems.push(item);
+        });
+
+        // 合并有效ID和需要保留的ID
+        const finalIds = [...new Set([...validIds, ...retainedIds])];
+
+        // 如果存在无效输入项，提示用户但不影响保存操作
+        if (invalidItems.length > 0) {
+            NotificationManager.show(`以下内容格式无效：${invalidItems.join('、')}`);
+        }
+
+        // 保存关键词
         const newKeywords = document.getElementById('keywords').value
             .split(/[;；]/)
             .map(k => k.trim())
@@ -492,8 +640,56 @@ class UIManager {
                 return k;
             });
 
-        this.blockListManager.updateBlockList('userId', newUserIds);
+        // 更新黑名单
+        this.blockListManager.updateBlockList('userId', finalIds);
         this.blockListManager.updateBlockList('keywords', newKeywords);
+
+        // 找出新增的用户ID
+        const addedUserIds = finalIds.filter(id => !oldUserIds.includes(id));
+        
+        // 在后台获取新增用户的用户名
+        if (addedUserIds.length > 0) {
+            this.processNewUserIds(addedUserIds);
+        }
+
+        return true;
+    }
+
+    /**
+     * 处理新增的用户ID
+     * @param {number[]} userIds - 用户ID列表
+     */
+    processNewUserIds(userIds) {
+        // 使用requestIdleCallback在浏览器空闲时获取用户名
+        if (window.requestIdleCallback) {
+            requestIdleCallback(() => {
+                this.processUserNameQueue(userIds);
+            }, { timeout: 1000 });
+        } else {
+            // 降级方案：使用setTimeout
+            setTimeout(() => {
+                this.processUserNameQueue(userIds);
+            }, 0);
+        }
+    }
+
+    /**
+     * 处理用户名获取队列
+     * @param {number[]} userIds - 用户ID列表
+     */
+    async processUserNameQueue(userIds) {
+        for (const userId of userIds) {
+            try {
+                const userName = await this.blockListManager.getUserName(userId, true); // 强制更新用户名
+                if (userName) {
+                    console.log(`[DMHY Block] 成功获取用户名: ${userName}(${userId})`);
+                }
+            } catch (error) {
+                ErrorHandler.handle(error, 'UIManager.processUserNameQueue');
+            }
+            // 添加延迟避免请求过于频繁
+            await new Promise(resolve => setTimeout(resolve, 500));
+        }
     }
 
     /**
@@ -523,6 +719,7 @@ class UIManager {
             if (userLink) {
                 e.preventDefault();
                 const userId = userLink.href.match(/user_id\/(\d+)/)?.[1];
+                const userName = userLink.textContent;
                 if (userId) {
                     menu.style.display = 'block';
                     menu.style.left = e.clientX + 'px';
@@ -530,8 +727,8 @@ class UIManager {
                     
                     document.getElementById('block-user').onclick = e => {
                         e.stopPropagation();
-                        if (this.blockListManager.addUser(parseInt(userId))) {
-                            NotificationManager.show('已将用户ID: ' + userId + ' 添加到黑名单');
+                        if (this.blockListManager.addUser(parseInt(userId), userName)) {
+                            NotificationManager.show(`已将用户 ${userName}(${userId}) 添加到黑名单`);
                             this.filterManager.applyFilters();
                         } else {
                             NotificationManager.show('该用户已在黑名单中');
