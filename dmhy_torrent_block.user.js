@@ -2,7 +2,7 @@
 // @name         DMHY Torrent Block
 // @name:zh-CN   动漫花园种子屏蔽助手
 // @namespace    https://github.com/xkbkx5904
-// @version      1.0.0
+// @version      1.0.1
 // @author       xkbkx5904
 // @description  Enhanced version of DMHY Block script with more features: UI management, regex filtering, context menu, and ad blocking
 // @description:zh-CN  增强版的动漫花园资源屏蔽工具，支持用户界面管理、正则表达式过滤、右键菜单和广告屏蔽等功能
@@ -17,9 +17,6 @@
 // @copyright    2025, xkbkx5904
 // @originalAuthor tautcony
 // @originalURL  https://greasyfork.org/zh-CN/scripts/36871-dmhy-block
-// @compatible   chrome Latest
-// @compatible   firefox Latest
-// @compatible   edge Latest
 // @icon         https://share.dmhy.org/favicon.ico
 // ==/UserScript==
 
@@ -275,9 +272,12 @@ function addContextMenu() {
             e.preventDefault();
             const userId = userLink.href.match(/user_id\/(\d+)/)?.[1];
             if (userId) {
+                const scrollX = window.scrollX;
+                const scrollY = window.scrollY;
+                
                 menu.style.display = 'block';
-                menu.style.left = e.pageX + 'px';
-                menu.style.top = e.pageY + 'px';
+                menu.style.left = (e.clientX + scrollX) + 'px';
+                menu.style.top = (e.clientY + scrollY) + 'px';
                 
                 // 点击添加到黑名单
                 const blockUserOption = document.getElementById('block-user');
