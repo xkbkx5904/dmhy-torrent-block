@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         DMHY Torrent Block
 // @name:zh-CN   动漫花园种子屏蔽助手
+// @name         DMHY Torrent Block
 // @namespace    https://github.com/xkbkx5904
-// @version      1.0.2
+// @version      1.0.4
 // @author       xkbkx5904
 // @description  Enhanced version of DMHY Block script with more features: UI management, regex filtering, context menu, and ad blocking
 // @description:zh-CN  增强版的动漫花园资源屏蔽工具，支持用户界面管理、正则表达式过滤、右键菜单和广告屏蔽等功能
@@ -299,6 +299,32 @@ function addContextMenu() {
     });
 }
 
+// 添加通知提示函数
+function showNotification(message) {
+    const notification = document.createElement('div');
+    notification.style.cssText = `
+        position: fixed;
+        top: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(0, 0, 0, 0.8);
+        color: white;
+        padding: 10px 20px;
+        border-radius: 4px;
+        z-index: 10001;
+        font-size: 14px;
+        transition: opacity 0.3s;
+    `;
+    notification.textContent = message;
+    document.body.appendChild(notification);
+
+    // 2秒后自动消失
+    setTimeout(() => {
+        notification.style.opacity = '0';
+        setTimeout(() => notification.remove(), 300);
+    }, 2000);
+}
+
 // 添加用户到黑名单
 function addUserToBlocklist(userId) {
     if (!userId || isNaN(userId)) return;
@@ -316,10 +342,10 @@ function addUserToBlocklist(userId) {
         saveBlockList();
         RemoveTorrentInBlockList();
         
-        // 显示提示
-        alert('已将用户ID: ' + userId + ' 添加到黑名单');
+        // 显示通知
+        showNotification('已将用户ID: ' + userId + ' 添加到黑名单');
     } else {
-        alert('该用户已在黑名单中');
+        showNotification('该用户已在黑名单中');
     }
 }
 
