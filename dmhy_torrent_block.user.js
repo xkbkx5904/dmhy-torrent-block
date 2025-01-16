@@ -2,7 +2,7 @@
 // @name:zh-CN   动漫花园种子屏蔽助手
 // @name         DMHY Torrent Block
 // @namespace    https://github.com/xkbkx5904
-// @version      1.1.3
+// @version      1.1.4
 // @author       xkbkx5904
 // @description  Enhanced version of DMHY Block script with more features: UI management, regex filtering, context menu, and ad blocking
 // @description:zh-CN  增强版的动漫花园资源屏蔽工具，支持用户界面管理、正则表达式过滤、右键菜单和广告屏蔽等功能
@@ -22,6 +22,14 @@
 
 /*
 更新日志：
+v1.1.4
+- 修复管理界面关闭时错误的未保存更改提示
+
+v1.1.3
+- 优化用户名显示和管理功能
+- 改进用户ID输入规则提示
+- 优化未完整删除的用户数据处理逻辑
+
 v1.1.2
 - 优化用户名显示和管理功能
 - 改进用户ID输入规则提示
@@ -603,15 +611,25 @@ class UIManager {
         const currentUserIds = document.getElementById('user-ids')?.value.trim() || '';
         const currentKeywords = document.getElementById('keywords')?.value.trim() || '';
         
-        // 获取原始数据进行比较
+        // 获取原始数据并格式化为相同的格式
         const originalUserIds = this.blockListManager.getUserIds()
-            .map(id => this.blockListManager.userNameMap.get(id.toString()) || id)
+            .map(async id => {
+                const name = await this.blockListManager.getUserName(id);
+                return name ? `${name}(${id})` : id;
+            })
             .join('；');
         const originalKeywords = this.blockListManager.getKeywords()
             .map(k => k instanceof RegExp ? `/${k.source}/` : k)
             .join('；');
 
-        return currentUserIds !== originalUserIds || currentKeywords !== originalKeywords;
+        // 标准化字符串进行比较（移除多余的空格和分号）
+        const normalizeString = (str) => str.split(/[;；]/)
+            .map(s => s.trim())
+            .filter(s => s)
+            .join('；');
+
+        return normalizeString(currentUserIds) !== normalizeString(originalUserIds) || 
+               normalizeString(currentKeywords) !== normalizeString(originalKeywords);
     }
 
     /**
@@ -1003,10 +1021,6 @@ class App {
 }
 
 // 启动应用
-(function() {
-    'use strict';
-    App.init();
-})();
 (function() {
     'use strict';
     App.init();
