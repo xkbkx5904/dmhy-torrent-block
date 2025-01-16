@@ -27,6 +27,7 @@
 v1.1.6
 - 修复关键词输入单个斜杠时的验证问题
 - 优化关键词处理逻辑，将单个斜杠视为普通字符串匹配
+- 改进管理界面，已有内容时自动在末尾添加分号，方便添加新内容
 
 v1.1.5
 - 移除右键添加黑名单时的通知提示
@@ -473,12 +474,25 @@ class UIManager {
 
     fillManagerData() {
         const keywords = this.blockListManager.getKeywords();
-        document.getElementById('keywords').value = keywords.map(k => {
+        const keywordsText = keywords.map(k => {
             if (k instanceof RegExp) {
                 return `/${k.source}/`;
             }
             return k;
         }).join('；');
+        
+        // 如果有关键词，在末尾添加分号
+        document.getElementById('keywords').value = keywordsText ? keywordsText + '；' : '';
+        
+        // 获取用户ID列表并在末尾添加分号
+        const userIds = this.blockListManager.getUserIds()
+            .map(id => {
+                const name = this.blockListManager.userNameMap.get(id.toString());
+                return name ? `${name}(${id})` : id;
+            })
+            .join('；');
+        
+        document.getElementById('user-ids').value = userIds ? userIds + '；' : '';
     }
 
     hasUnsavedChanges() {
