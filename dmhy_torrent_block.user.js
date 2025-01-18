@@ -2,10 +2,10 @@
 // @name:zh-CN   动漫花园种子屏蔽助手
 // @name         DMHY Torrent Block
 // @namespace    https://github.com/xkbkx5904
-// @version      1.2.1
+// @version      1.2.2
 // @author       xkbkx5904
 // @description  Enhanced version of DMHY Block script with more features: UI management, regex filtering, context menu, and ad blocking
-// @description:zh-CN  增强版的动漫花园资源屏蔽工具，支持用户界面管理、简繁体标题匹配、正则表达式过滤、右键菜单和广告屏蔽等功能
+// @description:zh-CN  增强版的动漫花园资源屏蔽工具，支持用户界面管理、右键發佈人添加ID到黑名单、简繁体标题匹配、正则表达式过滤和广告屏蔽等功能
 // @homepage     https://github.com/xkbkx5904/dmhy-torrent-block
 // @supportURL   https://github.com/xkbkx5904/dmhy-torrent-block/issues
 // @match        *://share.dmhy.org/*
@@ -25,6 +25,12 @@
 
 /*
 更新日志：  
+v1.2.2
+- 优化简繁体转换功能，增加香港繁体支持
+- 添加文字转换缓存机制，提升性能
+- 扩大缓存容量至2000条
+- 改进转换准确度
+
 v1.2.1
 - 修复opencc依赖问题
 
@@ -162,28 +168,70 @@ class ErrorHandler {
  * 文字转换工具类
  */
 class TextConverter {
+    static cache = new Map();
+    static cacheSize = 2000; // 缓存大小限制
+
     static async init() {
         try {
-            // 初始化OpenCC转换器
-            CONFIG.opencc.s2t = await OpenCC.Converter({ from: 'cn', to: 'tw' });
-            CONFIG.opencc.t2s = await OpenCC.Converter({ from: 'tw', to: 'cn' });
+            // 初始化所有转换器
+            CONFIG.opencc = {
+                s2t: await OpenCC.Converter({ from: 'cn', to: 'tw' }), // 简体到台湾繁体
+                s2hk: await OpenCC.Converter({ from: 'cn', to: 'hk' }), // 简体到香港繁体
+                t2s: await OpenCC.Converter({ from: 'tw', to: 'cn' }), // 繁体到简体
+            };
         } catch (error) {
             ErrorHandler.handle(error, 'TextConverter.init');
         }
     }
 
     static convertText(text) {
-        if (!text) return { original: '', simplified: '', traditional: '' };
+        if (!text) return { 
+            original: '', 
+            simplified: '', 
+            traditionalTW: '', 
+            traditionalHK: '' 
+        };
+
+        // 检查缓存
+        const cached = this.cache.get(text);
+        if (cached) {
+            return cached;
+        }
+
         try {
-            return {
+            const result = {
                 original: text,
                 simplified: CONFIG.opencc.t2s?.(text) || text,
-                traditional: CONFIG.opencc.s2t?.(text) || text
+                traditionalTW: CONFIG.opencc.s2t?.(text) || text,
+                traditionalHK: CONFIG.opencc.s2hk?.(text) || text
             };
+
+            // 添加到缓存
+            this.addToCache(text, result);
+
+            return result;
         } catch (error) {
             ErrorHandler.handle(error, 'TextConverter.convertText');
-            return { original: text, simplified: text, traditional: text };
+            return { 
+                original: text, 
+                simplified: text, 
+                traditionalTW: text,
+                traditionalHK: text 
+            };
         }
+    }
+
+    static addToCache(key, value) {
+        // 如果缓存达到大小限制，删除最早的项
+        if (this.cache.size >= this.cacheSize) {
+            const firstKey = this.cache.keys().next().value;
+            this.cache.delete(firstKey);
+        }
+        this.cache.set(key, value);
+    }
+
+    static clearCache() {
+        this.cache.clear();
     }
 }
 
@@ -389,7 +437,7 @@ class FilterManager {
         if (blockedUserIds.includes(userId)) return true;
 
         // 转换标题为简繁体版本
-        const { original, simplified, traditional } = TextConverter.convertText(title);
+        const { original, simplified, traditionalTW, traditionalHK } = TextConverter.convertText(title);
 
         return blockedKeywords.some(keyword => {
             if (typeof keyword === 'string') {
@@ -398,17 +446,19 @@ class FilterManager {
                 const lowerKeyword = keyword.toLowerCase();
                 
                 // 检查所有变体是否匹配
-                return [original, simplified, traditional].some(variant => 
+                return [original, simplified, traditionalTW, traditionalHK].some(variant => 
                     variant.toLowerCase().includes(lowerKeyword) ||
                     variant.toLowerCase().includes(keywordVariants.simplified.toLowerCase()) ||
-                    variant.toLowerCase().includes(keywordVariants.traditional.toLowerCase())
+                    variant.toLowerCase().includes(keywordVariants.traditionalTW.toLowerCase()) ||
+                    variant.toLowerCase().includes(keywordVariants.traditionalHK.toLowerCase())
                 );
             }
             // 正则表达式匹配所有变体
             return keyword instanceof RegExp && (
                 original.match(keyword) ||
                 simplified.match(keyword) ||
-                traditional.match(keyword)
+                traditionalTW.match(keyword) ||
+                traditionalHK.match(keyword)
             );
         });
     }
