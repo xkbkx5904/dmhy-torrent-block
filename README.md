@@ -1,6 +1,6 @@
 # 动漫花园种子屏蔽助手
 
-一个功能强大的动漫花园资源过滤工具，帮助你轻松管理和过滤不想看到的资源。本脚本基于 [DMHY Block](https://greasyfork.org/zh-CN/scripts/36871-dmhy-block) 重写开发，增加了更多实用功能。
+一个功能强大的动漫花园资源过滤工具，帮助你轻松管理和过滤不想看到的资源，支持简繁体转换匹配关键词。本脚本基于 [DMHY Block](https://greasyfork.org/zh-CN/scripts/36871-dmhy-block) 重写开发，增加了更多实用功能。
 
 ## 主要功能
 
