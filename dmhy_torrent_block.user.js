@@ -5,7 +5,7 @@
 // @version      1.2.0
 // @author       xkbkx5904
 // @description  Enhanced version of DMHY Block script with more features: UI management, regex filtering, context menu, and ad blocking
-// @description:zh-CN  增强版的动漫花园资源屏蔽工具，支持用户界面管理、简繁体标题匹配、正则表达式过滤、右键菜单和广告屏蔽等功能
+// @description:zh-CN  增强版的动漫花园资源屏蔽工具，支持用户界面管理、简繁体标题匹配、正则表达式过滤、右键添加黑名单和广告屏蔽等功能
 // @homepage     https://github.com/xkbkx5904/dmhy-torrent-block
 // @supportURL   https://github.com/xkbkx5904/dmhy-torrent-block/issues
 // @match        *://share.dmhy.org/*
