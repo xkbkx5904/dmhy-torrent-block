@@ -2,10 +2,10 @@
 // @name:zh-CN   动漫花园种子屏蔽助手
 // @name         DMHY Torrent Block
 // @namespace    https://github.com/xkbkx5904
-// @version      1.1.6
+// @version      1.2.0
 // @author       xkbkx5904
 // @description  Enhanced version of DMHY Block script with more features: UI management, regex filtering, context menu, and ad blocking
-// @description:zh-CN  增强版的动漫花园资源屏蔽工具，支持用户界面管理、正则表达式过滤、右键菜单和广告屏蔽等功能
+// @description:zh-CN  增强版的动漫花园资源屏蔽工具，支持用户界面管理、简繁体标题匹配、正则表达式过滤、右键菜单和广告屏蔽等功能
 // @homepage     https://github.com/xkbkx5904/dmhy-torrent-block
 // @supportURL   https://github.com/xkbkx5904/dmhy-torrent-block/issues
 // @match        *://share.dmhy.org/*
@@ -20,10 +20,16 @@
 // @icon         https://share.dmhy.org/favicon.ico
 // @downloadURL https://update.greasyfork.org/scripts/523811/DMHY%20Torrent%20Block.user.js
 // @updateURL https://update.greasyfork.org/scripts/523811/DMHY%20Torrent%20Block.meta.js
+// @require      https://cdn.jsdelivr.net/npm/opencc-js@1.0.5/dist/umd/opencc.min.js
 // ==/UserScript==
 
 /*
 更新日志：
+v1.2.0
+- 添加简繁体标题匹配功能
+- 集成OpenCC实现准确的简繁体转换
+- 优化关键词匹配逻辑，支持不区分简繁体
+
 v1.1.6
 - 修复关键词输入单个斜杠时的验证问题
 - 优化关键词处理逻辑，将单个斜杠视为普通字符串匹配
@@ -129,6 +135,14 @@ const CONFIG = {
             max-height: 80vh;
             overflow-y: auto;
         `
+    },
+
+    // OpenCC配置
+    opencc: {
+        // 简体到繁体转换器
+        s2t: null,
+        // 繁体到简体转换器
+        t2s: null
     }
 };
 
@@ -138,6 +152,35 @@ const CONFIG = {
 class ErrorHandler {
     static handle(error, context) {
         console.warn(`[DMHY Block] Error in ${context}:`, error);
+    }
+}
+
+/**
+ * 文字转换工具类
+ */
+class TextConverter {
+    static async init() {
+        try {
+            // 初始化OpenCC转换器
+            CONFIG.opencc.s2t = await OpenCC.Converter({ from: 'cn', to: 'tw' });
+            CONFIG.opencc.t2s = await OpenCC.Converter({ from: 'tw', to: 'cn' });
+        } catch (error) {
+            ErrorHandler.handle(error, 'TextConverter.init');
+        }
+    }
+
+    static convertText(text) {
+        if (!text) return { original: '', simplified: '', traditional: '' };
+        try {
+            return {
+                original: text,
+                simplified: CONFIG.opencc.t2s?.(text) || text,
+                traditional: CONFIG.opencc.s2t?.(text) || text
+            };
+        } catch (error) {
+            ErrorHandler.handle(error, 'TextConverter.convertText');
+            return { original: text, simplified: text, traditional: text };
+        }
     }
 }
 
@@ -342,11 +385,28 @@ class FilterManager {
     shouldHideItem(userId, title, blockedUserIds, blockedKeywords) {
         if (blockedUserIds.includes(userId)) return true;
 
+        // 转换标题为简繁体版本
+        const { original, simplified, traditional } = TextConverter.convertText(title);
+
         return blockedKeywords.some(keyword => {
             if (typeof keyword === 'string') {
-                return title.toLowerCase().includes(keyword.toLowerCase());
+                // 将关键词也转换为简繁体
+                const keywordVariants = TextConverter.convertText(keyword);
+                const lowerKeyword = keyword.toLowerCase();
+                
+                // 检查所有变体是否匹配
+                return [original, simplified, traditional].some(variant => 
+                    variant.toLowerCase().includes(lowerKeyword) ||
+                    variant.toLowerCase().includes(keywordVariants.simplified.toLowerCase()) ||
+                    variant.toLowerCase().includes(keywordVariants.traditional.toLowerCase())
+                );
             }
-            return keyword instanceof RegExp && title.match(keyword);
+            // 正则表达式匹配所有变体
+            return keyword instanceof RegExp && (
+                original.match(keyword) ||
+                simplified.match(keyword) ||
+                traditional.match(keyword)
+            );
         });
     }
 }
@@ -818,6 +878,9 @@ class EventManager {
 class App {
     static async init() {
         try {
+            // 初始化文字转换器
+            await TextConverter.init();
+            
             AdBlocker.init();
 
             const blockListManager = new BlockListManager();
