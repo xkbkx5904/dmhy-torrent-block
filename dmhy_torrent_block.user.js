@@ -2,10 +2,10 @@
 // @name:zh-CN   动漫花园种子屏蔽助手
 // @name         DMHY Torrent Block
 // @namespace    https://github.com/xkbkx5904
-// @version      1.2.0
+// @version      1.2.1
 // @author       xkbkx5904
 // @description  Enhanced version of DMHY Block script with more features: UI management, regex filtering, context menu, and ad blocking
-// @description:zh-CN  增强版的动漫花园资源屏蔽工具，支持用户界面管理、简繁体标题匹配、正则表达式过滤、右键添加黑名单和广告屏蔽等功能
+// @description:zh-CN  增强版的动漫花园资源屏蔽工具，支持用户界面管理、简繁体标题匹配、正则表达式过滤、右键菜单和广告屏蔽等功能
 // @homepage     https://github.com/xkbkx5904/dmhy-torrent-block
 // @supportURL   https://github.com/xkbkx5904/dmhy-torrent-block/issues
 // @match        *://share.dmhy.org/*
@@ -20,11 +20,14 @@
 // @icon         https://share.dmhy.org/favicon.ico
 // @downloadURL https://update.greasyfork.org/scripts/523811/DMHY%20Torrent%20Block.user.js
 // @updateURL https://update.greasyfork.org/scripts/523811/DMHY%20Torrent%20Block.meta.js
-// @require      https://cdn.jsdelivr.net/npm/opencc-js@1.0.5/dist/umd/opencc.min.js
+// @require      https://cdn.jsdelivr.net/npm/opencc-js@1.0.5/dist/umd/full.js
 // ==/UserScript==
 
 /*
-更新日志：
+更新日志：  
+v1.2.1
+- 修复opencc依赖问题
+
 v1.2.0
 - 添加简繁体标题匹配功能
 - 集成OpenCC实现准确的简繁体转换
