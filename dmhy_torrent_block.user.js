@@ -2,7 +2,7 @@
 // @name:zh-CN   动漫花园种子屏蔽助手
 // @name         DMHY Torrent Block
 // @namespace    https://github.com/xkbkx5904
-// @version      1.2.2
+// @version      1.2.3
 // @author       xkbkx5904
 // @description  Enhanced version of DMHY Block script with more features: UI management, regex filtering, context menu, and ad blocking
 // @description:zh-CN  增强版的动漫花园资源屏蔽工具，支持用户界面管理、右键發佈人添加ID到黑名单、简繁体标题匹配、正则表达式过滤和广告屏蔽等功能
@@ -18,13 +18,15 @@
 // @originalAuthor tautcony
 // @originalURL  https://greasyfork.org/zh-CN/scripts/36871-dmhy-block
 // @icon         https://share.dmhy.org/favicon.ico
-// @downloadURL https://update.greasyfork.org/scripts/523811/DMHY%20Torrent%20Block.user.js
-// @updateURL https://update.greasyfork.org/scripts/523811/DMHY%20Torrent%20Block.meta.js
 // @require      https://cdn.jsdelivr.net/npm/opencc-js@1.0.5/dist/umd/full.js
 // ==/UserScript==
 
 /*
 更新日志：  
+v1.2.3
+- 添加行重排序功能，修复斑马纹样式 (感谢 ishadows)
+- 优化过滤后的显示效果
+
 v1.2.2
 - 优化简繁体转换功能，增加香港繁体支持
 - 添加文字转换缓存机制，提升性能
@@ -169,7 +171,7 @@ class ErrorHandler {
  */
 class TextConverter {
     static cache = new Map();
-    static cacheSize = 2000; // 缓存大小限制
+    static cacheSize = 100; // 缓存大小限制
 
     static async init() {
         try {
@@ -406,13 +408,20 @@ class FilterManager {
     }
 
     filterTorrentList(blockedUserIds, blockedKeywords) {
+        let n = 0; // 用于设置行的奇偶样式
+        
         document.querySelectorAll(CONFIG.selectors.torrentList).forEach(elem => {
             try {
                 const { title, userId } = this.extractItemInfo(elem);
                 if (!title || !userId) return;
 
                 if (this.shouldHideItem(userId, title, blockedUserIds, blockedKeywords)) {
-                    elem.style.display = 'none';
+                    elem.style.display = 'none'; // 隐藏元素而不是删除
+                } else {
+                    elem.style.display = ''; // 确保元素可见
+                    // 设置奇偶行样式
+                    elem.className = n % 2 === 0 ? 'even' : 'odd';
+                    n++;
                 }
             } catch (error) {
                 ErrorHandler.handle(error, 'FilterManager.filterTorrentList.item');
