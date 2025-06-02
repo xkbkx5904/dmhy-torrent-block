@@ -2,7 +2,7 @@
 // @name:zh-CN   动漫花园种子屏蔽助手
 // @name         DMHY Torrent Block
 // @namespace    https://github.com/xkbkx5904
-// @version      1.3.4
+// @version      1.3.5
 // @author       xkbkx5904
 // @description  Enhanced version of DMHY Block script with more features: UI management, regex filtering, context menu, ad blocking, and GitHub sync
 // @description:zh-CN  增强版的动漫花园资源屏蔽工具，支持用户界面管理、右键發佈人添加ID到黑名单、简繁体标题匹配、正则表达式过滤、广告屏蔽和GitHub同步等功能
@@ -24,6 +24,12 @@
 
 /*
 更新日志：
+v1.3.5
+- 优化 GitHub 同步功能
+- 改进 Gist 查找和创建逻辑
+- 修复同步时 Gist 不存在的问题
+- 增强错误处理和自动恢复机制
+
 v1.3.4
 - 优化公共统计池的JSON数据格式
 - 改进数据可读性，添加缩进和换行
@@ -196,7 +202,7 @@ class ErrorHandler {
  */
 class TextConverter {
     static cache = new Map();
-    static cacheSize = 100; // 缓存大小限制
+    static cacheSize = 200; // 缓存大小限制
 
     static async init() {
         try {
@@ -273,6 +279,9 @@ class BlockListManager {
 
     async init() {
         await this.loadBlockList();
+        // 从本地存储加载用户名映射
+        const savedUserNames = GM_getValue('dmhy_username_map', {});
+        this.userNameMap = new Map(Object.entries(savedUserNames));
     }
 
     async loadBlockList() {
@@ -358,14 +367,17 @@ class BlockListManager {
     async getUserName(userId, forceUpdate = false) {
         if (!userId) return null;
 
-        const cachedName = this.userNameMap.get(userId.toString());
+        const userIdStr = userId.toString();
+        const cachedName = this.userNameMap.get(userIdStr);
+        
+        // 如果本地已有用户名且不强制更新，直接返回
         if (cachedName && !forceUpdate) return cachedName;
 
         const userLink = document.querySelector(`a[href="/topics/list/user_id/${userId}"]`);
         if (userLink) {
             const userName = userLink.textContent;
             if (userName) {
-                this.userNameMap.set(userId.toString(), userName);
+                this.userNameMap.set(userIdStr, userName);
                 this.saveUserNameMap();
                 return userName;
             }
@@ -381,15 +393,15 @@ class BlockListManager {
                     const userName = doc.querySelector(`a[href="/topics/list/user_id/${userId}"]`)?.textContent;
 
                     if (userName) {
-                        this.userNameMap.set(userId.toString(), userName);
+                        this.userNameMap.set(userIdStr, userName);
                         this.saveUserNameMap();
                         resolve(userName);
                     } else {
-                        resolve(userId.toString());
+                        resolve(userIdStr);
                     }
                 } catch (error) {
                     ErrorHandler.handle(error, 'BlockListManager.getUserName');
-                    resolve(userId.toString());
+                    resolve(userIdStr);
                 }
             };
 
@@ -600,7 +612,12 @@ class UIManager {
                             </label>
                         </div>
                         <div id="stats-section" style="display:none;">
-                            <h5 style="margin:10px 0;">黑名单用户排行榜</h5>
+                            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+                                <h5 style="margin:0;">黑名单用户排行榜</h5>
+                                <div style="font-size:12px;color:#666;">
+                                    最后更新：<span id="stats-last-update">-</span>
+                                </div>
+                            </div>
                             <div id="stats-list" style="max-height:200px;overflow-y:auto;"></div>
                         </div>
                     </div>
@@ -614,6 +631,13 @@ class UIManager {
         this.initManagerEvents();
         this.fillManagerData();
         this.initGitHubEvents();
+        
+        // 如果已开启贡献，显示统计信息并更新
+        if (this.githubSyncManager.isContributing) {
+            const statsSection = document.getElementById('stats-section');
+            statsSection.style.display = 'block';
+            await this.updateStatsList();
+        }
     }
 
     initManagerEvents() {
@@ -864,6 +888,12 @@ class UIManager {
             this.processNewUserIds(addedUserIds);
         }
 
+        // 如果开启了贡献到公共池，自动同步
+        if (this.githubSyncManager.isContributing) {
+            await this.githubSyncManager.contributeToPublicStats();
+            await this.updateStatsList();
+        }
+
         return true;
     }
 
@@ -1024,19 +1054,16 @@ class UIManager {
                 await this.updateStatsList();
                 statsSection.style.display = 'block';
             } else {
+                // 取消贡献时，从公共池中移除数据
+                await this.githubSyncManager.removeFromPublicStats();
                 statsSection.style.display = 'none';
             }
         });
-
-        // 如果已开启贡献，显示统计信息
-        if (this.githubSyncManager.isContributing) {
-            this.updateStatsList();
-            statsSection.style.display = 'block';
-        }
     }
 
     async updateStatsList() {
         const statsList = document.getElementById('stats-list');
+        const statsLastUpdate = document.getElementById('stats-last-update');
         const stats = await this.githubSyncManager.getPublicStats();
         
         if (stats && stats.length > 0) {
@@ -1046,8 +1073,10 @@ class UIManager {
                 </div>
             `).join('');
             statsList.innerHTML = html;
+            statsLastUpdate.textContent = new Date().toLocaleString();
         } else {
             statsList.innerHTML = '<div style="padding:5px;color:#666;">暂无统计数据</div>';
+            statsLastUpdate.textContent = '-';
         }
     }
 }
@@ -1178,9 +1207,74 @@ class GitHubSyncManager {
         }
     }
 
+    async updateGist() {
+        if (!this.gistId) {
+            return await this.createGist();
+        }
+
+        try {
+            const response = await fetch(`https://api.github.com/gists/${this.gistId}`, {
+                method: 'PATCH',
+                headers: {
+                    'Authorization': `token ${this.token}`,
+                    'Accept': 'application/vnd.github.v3+json'
+                },
+                body: JSON.stringify({
+                    files: {
+                        'blocklist.json': {
+                            content: JSON.stringify({
+                                userIds: this.blockListManager.getUserIds(),
+                                keywords: this.blockListManager.getKeywords().map(k => 
+                                    k instanceof RegExp ? `/${k.source}/` : k
+                                ),
+                                lastUpdate: new Date().toISOString()
+                            })
+                        }
+                    }
+                })
+            });
+
+            if (!response.ok) {
+                console.error('[DMHY Block] 更新 Gist 失败:', response.status);
+                // 如果 Gist 不存在，清除 ID 并重新创建
+                if (response.status === 404) {
+                    this.gistId = '';
+                    GM_setValue('github_gist_id', '');
+                    return await this.createGist();
+                }
+                return false;
+            }
+
+            return true;
+        } catch (error) {
+            console.error('[DMHY Block] Update gist error:', error);
+            return false;
+        }
+    }
+
     async createGist() {
         try {
+            // 先检查是否已存在 Gist
             const response = await fetch('https://api.github.com/gists', {
+                headers: {
+                    'Authorization': `token ${this.token}`,
+                    'Accept': 'application/vnd.github.v3+json'
+                }
+            });
+
+            if (response.ok) {
+                const gists = await response.json();
+                // 查找描述为 'DMHY Block List Sync' 的 Gist
+                const existingGist = gists.find(gist => gist.description === 'DMHY Block List Sync');
+                if (existingGist) {
+                    this.gistId = existingGist.id;
+                    GM_setValue('github_gist_id', this.gistId);
+                    return true;
+                }
+            }
+
+            // 如果没有找到现有 Gist，创建新的
+            const createResponse = await fetch('https://api.github.com/gists', {
                 method: 'POST',
                 headers: {
                     'Authorization': `token ${this.token}`,
@@ -1203,8 +1297,8 @@ class GitHubSyncManager {
                 })
             });
 
-            if (response.ok) {
-                const gist = await response.json();
+            if (createResponse.ok) {
+                const gist = await createResponse.json();
                 this.gistId = gist.id;
                 GM_setValue('github_gist_id', this.gistId);
                 return true;
@@ -1216,128 +1310,75 @@ class GitHubSyncManager {
         }
     }
 
-    async updateGist() {
-        if (!this.gistId) {
-            return await this.createGist();
-        }
-
-        try {
-            const response = await fetch(`https://api.github.com/gists/${this.gistId}`, {
-                method: 'PATCH',
-                headers: {
-                    'Authorization': `token ${this.token}`,
-                    'Accept': 'application/vnd.github.v3+json'
-                },
-                body: JSON.stringify({
-                files: {
-                    'blocklist.json': {
-                        content: JSON.stringify({
-                                userIds: this.blockListManager.getUserIds(),
-                                keywords: this.blockListManager.getKeywords().map(k => 
-                                    k instanceof RegExp ? `/${k.source}/` : k
-                                ),
-                                lastUpdate: new Date().toISOString()
-                            })
-                        }
-                    }
-                })
-            });
-
-            return response.ok;
-        } catch (error) {
-            console.error('[DMHY Block] Update gist error:', error);
-            return false;
-        }
-    }
-
     async syncFromGist() {
-        if (!this.gistId) return false;
-
-        try {
-            const response = await fetch(`https://api.github.com/gists/${this.gistId}`, {
-                headers: {
-                    'Authorization': `token ${this.token}`,
-                    'Accept': 'application/vnd.github.v3+json'
-                }
-            });
-
-            if (response.ok) {
-                const gist = await response.json();
-                const content = JSON.parse(gist.files['blocklist.json'].content);
-                
-                this.blockListManager.updateBlockList('userId', content.userIds);
-                this.blockListManager.updateBlockList('keywords', content.keywords.map(k => {
-                    if (k.startsWith('/') && k.endsWith('/')) {
-                        try {
-                            return new RegExp(k.slice(1, -1));
-                        } catch (e) {
-                            return k;
-                        }
-                    }
-                    return k;
-                }));
-
-                return true;
-            }
-            return false;
-        } catch (error) {
-            console.error('[DMHY Block] Sync from gist error:', error);
-            return false;
-        }
-    }
-
-    async contributeToPublicStats() {
-        if (!this.isContributing) return;
-
-        try {
-            const userIds = this.blockListManager.getUserIds();
-
-            // 获取现有统计数据
-            const response = await fetch(`https://api.github.com/gists/${this.publicStatsGistId}`, {
-                headers: {
-                    'Authorization': `token ${this.token}`,
-                    'Accept': 'application/vnd.github.v3+json'
-                }
-            });
-
-            if (response.ok) {
-                const gist = await response.json();
-                const content = JSON.parse(gist.files['stats.json'].content);
-                
-                // 更新或添加当前用户的贡献
-                const contributorIndex = content.contributors.findIndex(c => c.githubUser === this.githubUser);
-                if (contributorIndex >= 0) {
-                    content.contributors[contributorIndex] = {
-                        githubUser: this.githubUser,
-                        userIds: userIds,
-                        lastUpdate: new Date().toISOString()
-                    };
-                } else {
-                    content.contributors.push({
-                        githubUser: this.githubUser,
-                        userIds: userIds,
-                        lastUpdate: new Date().toISOString()
-                    });
-                }
-
-                // 更新 Gist，使用格式化的 JSON
-                await fetch(`https://api.github.com/gists/${this.publicStatsGistId}`, {
-                    method: 'PATCH',
+        if (!this.gistId) {
+            // 如果没有 Gist ID，先尝试查找现有的 Gist
+            try {
+                const response = await fetch('https://api.github.com/gists', {
                     headers: {
                         'Authorization': `token ${this.token}`,
                         'Accept': 'application/vnd.github.v3+json'
-                    },
-                    body: JSON.stringify({
-                        files: {
-                            'stats.json': {
-                                content: JSON.stringify(content, null, 2)
-                            }
-                        }
-                    })
+                    }
                 });
+
+                if (response.ok) {
+                    const gists = await response.json();
+                    // 查找描述为 'DMHY Block List Sync' 的 Gist
+                    const existingGist = gists.find(gist => gist.description === 'DMHY Block List Sync');
+                    if (existingGist) {
+                        this.gistId = existingGist.id;
+                        GM_setValue('github_gist_id', this.gistId);
+                    } else {
+                        return false;
+                    }
+                } else {
+                    return false;
+                }
+            } catch (error) {
+                console.error('[DMHY Block] 查找 Gist 失败:', error);
+                return false;
             }
+        }
+
+        try {
+            const response = await fetch(`https://api.github.com/gists/${this.gistId}`, {
+                headers: {
+                    'Authorization': `token ${this.token}`,
+                    'Accept': 'application/vnd.github.v3+json'
+                }
+            });
+
+            if (!response.ok) {
+                console.error('[DMHY Block] 从 Gist 同步失败:', response.status);
+                // 如果 Gist 不存在，清除 ID 并重新查找
+                if (response.status === 404) {
+                    this.gistId = '';
+                    GM_setValue('github_gist_id', '');
+                    // 重新调用 syncFromGist 来查找 Gist
+                    return await this.syncFromGist();
+                }
+                return false;
+            }
+
+            const gist = await response.json();
+            const content = JSON.parse(gist.files['blocklist.json'].content);
+            
+            this.blockListManager.updateBlockList('userId', content.userIds);
+            this.blockListManager.updateBlockList('keywords', content.keywords.map(k => {
+                if (k.startsWith('/') && k.endsWith('/')) {
+                    try {
+                        return new RegExp(k.slice(1, -1));
+                    } catch (e) {
+                        return k;
+                    }
+                }
+                return k;
+            }));
+
+            return true;
         } catch (error) {
-            console.error('[DMHY Block] Contribute to public stats error:', error);
+            console.error('[DMHY Block] Sync from gist error:', error);
+            return false;
         }
     }
 
@@ -1349,13 +1390,32 @@ class GitHubSyncManager {
                 }
             });
 
-            if (response.ok) {
-                const gist = await response.json();
-                const content = JSON.parse(gist.files['stats.json'].content);
+            if (!response.ok) {
+                console.error('[DMHY Block] 获取公共池数据失败:', response.status);
+                return null;
+            }
+
+            const gist = await response.json();
+            if (!gist.files || !gist.files['stats.json']) {
+                console.error('[DMHY Block] 公共池文件不存在');
+                return null;
+            }
+
+            const content = gist.files['stats.json'].content;
+            if (!content) {
+                console.error('[DMHY Block] 公共池内容为空');
+                return null;
+            }
+
+            try {
+                const parsedContent = JSON.parse(content);
+                if (!parsedContent.contributors) {
+                    parsedContent.contributors = [];
+                }
                 
                 // 计算每个用户ID被屏蔽的次数
                 const stats = {};
-                content.contributors.forEach(contributor => {
+                parsedContent.contributors.forEach(contributor => {
                     contributor.userIds.forEach(userId => {
                         stats[userId] = (stats[userId] || 0) + 1;
                     });
@@ -1375,11 +1435,155 @@ class GitHubSyncManager {
                     ...stat,
                     userName: userNames[stat.userId] || `用户${stat.userId}`
                 }));
+            } catch (parseError) {
+                console.error('[DMHY Block] 解析公共池数据失败:', parseError);
+                return null;
             }
-            return null;
         } catch (error) {
-            console.error('[DMHY Block] Get public stats error:', error);
+            console.error('[DMHY Block] 获取公共统计失败:', error);
             return null;
+        }
+    }
+
+    async removeFromPublicStats() {
+        try {
+            // 获取现有统计数据
+            const response = await fetch(`https://api.github.com/gists/${this.publicStatsGistId}`, {
+                headers: {
+                    'Authorization': `token ${this.token}`,
+                    'Accept': 'application/vnd.github.v3+json'
+                }
+            });
+
+            if (!response.ok) {
+                console.error('[DMHY Block] 获取公共池数据失败:', response.status);
+                return;
+            }
+
+            const gist = await response.json();
+            if (!gist.files || !gist.files['stats.json']) {
+                console.error('[DMHY Block] 公共池文件不存在');
+                return;
+            }
+
+            const content = gist.files['stats.json'].content;
+            if (!content) {
+                console.error('[DMHY Block] 公共池内容为空');
+                return;
+            }
+
+            try {
+                const parsedContent = JSON.parse(content);
+                if (!parsedContent.contributors) {
+                    parsedContent.contributors = [];
+                }
+                
+                // 移除当前用户的贡献
+                parsedContent.contributors = parsedContent.contributors.filter(c => c.githubUser !== this.githubUser);
+
+                // 更新 Gist
+                const updateResponse = await fetch(`https://api.github.com/gists/${this.publicStatsGistId}`, {
+                    method: 'PATCH',
+                    headers: {
+                        'Authorization': `token ${this.token}`,
+                        'Accept': 'application/vnd.github.v3+json'
+                    },
+                    body: JSON.stringify({
+                        files: {
+                            'stats.json': {
+                                content: JSON.stringify(parsedContent, null, 2)
+                            }
+                        }
+                    })
+                });
+
+                if (!updateResponse.ok) {
+                    console.error('[DMHY Block] 更新公共池失败:', updateResponse.status);
+                }
+            } catch (parseError) {
+                console.error('[DMHY Block] 解析公共池数据失败:', parseError);
+            }
+        } catch (error) {
+            console.error('[DMHY Block] 从公共池移除数据失败:', error);
+        }
+    }
+
+    async contributeToPublicStats() {
+        if (!this.isContributing) return;
+
+        try {
+            const userIds = this.blockListManager.getUserIds();
+
+            // 获取现有统计数据
+            const response = await fetch(`https://api.github.com/gists/${this.publicStatsGistId}`, {
+                headers: {
+                    'Authorization': `token ${this.token}`,
+                    'Accept': 'application/vnd.github.v3+json'
+                }
+            });
+
+            if (!response.ok) {
+                console.error('[DMHY Block] 获取公共池数据失败:', response.status);
+                return;
+            }
+
+            const gist = await response.json();
+            if (!gist.files || !gist.files['stats.json']) {
+                console.error('[DMHY Block] 公共池文件不存在');
+                return;
+            }
+
+            const content = gist.files['stats.json'].content;
+            let parsedContent;
+            
+            try {
+                parsedContent = content ? JSON.parse(content) : { contributors: [] };
+            } catch (parseError) {
+                console.error('[DMHY Block] 解析公共池数据失败:', parseError);
+                parsedContent = { contributors: [] };
+            }
+
+            if (!parsedContent.contributors) {
+                parsedContent.contributors = [];
+            }
+            
+            // 更新或添加当前用户的贡献
+            const contributorIndex = parsedContent.contributors.findIndex(c => c.githubUser === this.githubUser);
+            if (contributorIndex >= 0) {
+                parsedContent.contributors[contributorIndex] = {
+                    githubUser: this.githubUser,
+                    userIds: userIds,
+                    lastUpdate: new Date().toISOString()
+                };
+            } else {
+                parsedContent.contributors.push({
+                    githubUser: this.githubUser,
+                    userIds: userIds,
+                    lastUpdate: new Date().toISOString()
+                });
+            }
+
+            // 更新 Gist
+            const updateResponse = await fetch(`https://api.github.com/gists/${this.publicStatsGistId}`, {
+                method: 'PATCH',
+                headers: {
+                    'Authorization': `token ${this.token}`,
+                    'Accept': 'application/vnd.github.v3+json'
+                },
+                body: JSON.stringify({
+                    files: {
+                        'stats.json': {
+                            content: JSON.stringify(parsedContent, null, 2)
+                        }
+                    }
+                })
+            });
+
+            if (!updateResponse.ok) {
+                console.error('[DMHY Block] 更新公共池失败:', updateResponse.status);
+            }
+        } catch (error) {
+            console.error('[DMHY Block] 贡献到公共池失败:', error);
         }
     }
 
