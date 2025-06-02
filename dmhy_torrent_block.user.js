@@ -2,7 +2,7 @@
 // @name:zh-CN   动漫花园种子屏蔽助手
 // @name         DMHY Torrent Block
 // @namespace    https://github.com/xkbkx5904
-// @version      1.3.5
+// @version      1.3.6
 // @author       xkbkx5904
 // @description  Enhanced version of DMHY Block script with more features: UI management, regex filtering, context menu, ad blocking, and GitHub sync
 // @description:zh-CN  增强版的动漫花园资源屏蔽工具，支持用户界面管理、右键發佈人添加ID到黑名单、简繁体标题匹配、正则表达式过滤、广告屏蔽和GitHub同步等功能
@@ -24,6 +24,12 @@
 
 /*
 更新日志：
+v1.3.6
+- 添加详细的日志输出系统
+- 优化错误处理和提示信息
+- 改进代码结构和可维护性
+- 统一配置管理
+
 v1.3.5
 - 优化 GitHub 同步功能
 - 改进 Gist 查找和创建逻辑
@@ -110,12 +116,17 @@ v1.1.0
 */
 
 /**
- * 全局配置对象
+ * 配置对象
  */
 const CONFIG = {
     // 存储相关配置
     storage: {
-        blockListKey: 'dmhy_blocklist'
+        blockListKey: 'dmhy_blocklist',
+        usernameMapKey: 'dmhy_username_map',
+        githubTokenKey: 'github_token',
+        githubGistIdKey: 'github_gist_id',
+        isContributingKey: 'is_contributing',
+        githubUserKey: 'github_user'
     },
 
     // DOM选择器配置
@@ -124,96 +135,110 @@ const CONFIG = {
         userLink: "td:last-child a[href*='/user_id/']",
         titleCell: "td.title",
         adSelectors: [
-            // 精确定位广告容器（修复 ID 选择器）
             '[id="1280_adv"]',
             '[id="pkpk"]',
             '.kiwi-ad-wrapper-1280x120',
-
-            // 广告追踪相关
             'a[onclick*="_trackEvent"][onclick*="ad"]',
-
-            // PikPak 相关
             'a[href*="mypikpak.com/drive/url-checker"]',
-
-            // 特定广告图片
             'div[align="center"] > a[href*="sng.link"] > img',
             'div[align="center"] > a[href*="weidian.com"] > img[src*="/1280pik.png"]',
             'img[src*="/VA"][src*=".gif"]'
         ]
     },
 
-    // UI相关样式配置
-    styles: {
-        notification: `
-            position: fixed;
-            top: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            background: rgba(0, 0, 0, 0.8);
-            color: white;
-            padding: 10px 20px;
-            border-radius: 4px;
-            z-index: 10001;
-            font-size: 14px;
-            transition: opacity 0.3s;
-        `,
-        blocklistUI: `
-            position: fixed;
-            left: 10px;
-            top: 10px;
-            z-index: 9999;
-        `,
-        manager: `
-            position: fixed;
-            left: 50%;
-            top: 50%;
-            transform: translate(-50%,-50%);
-            background: white;
-            padding: 20px;
-            border: 1px solid #ccc;
-            border-radius: 5px;
-            z-index: 10000;
-            width: 500px;
-            max-height: 80vh;
-            overflow-y: auto;
-        `
+    // GitHub 相关配置
+    github: {
+        publicStatsGistId: 'c2df1ecfe5d04f3f2cfb92fd206d4884',
+        gistDescription: 'DMHY Block List Sync'
     },
 
-    // OpenCC配置
-    opencc: {
-        // 简体到繁体转换器
-        s2t: null,
-        // 繁体到简体转换器
-        t2s: null
+    // 缓存配置
+    cache: {
+        textConverterSize: 200
     }
 };
 
 /**
- * 错误处理类
+ * 样式配置
  */
-class ErrorHandler {
-    static handle(error, context) {
-        console.warn(`[DMHY Block] Error in ${context}:`, error);
-    }
-}
+const STYLES = {
+    notification: `
+        position: fixed;
+        top: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(0, 0, 0, 0.8);
+        color: white;
+        padding: 10px 20px;
+        border-radius: 4px;
+        z-index: 10001;
+        font-size: 14px;
+        transition: opacity 0.3s;
+    `,
+    blocklistUI: `
+        position: fixed;
+        left: 10px;
+        top: 10px;
+        z-index: 9999;
+    `,
+    manager: `
+        position: fixed;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%,-50%);
+        background: white;
+        padding: 20px;
+        border: 1px solid #ccc;
+        border-radius: 5px;
+        z-index: 10000;
+        width: 500px;
+        max-height: 80vh;
+        overflow-y: auto;
+    `
+};
 
 /**
- * 文字转换工具类
+ * 工具类
  */
-class TextConverter {
+class Utils {
     static cache = new Map();
-    static cacheSize = 200; // 缓存大小限制
+    static opencc = {
+        s2t: null,
+        s2hk: null,
+        t2s: null
+    };
 
     static async init() {
         try {
-            // 初始化所有转换器
-            CONFIG.opencc = {
-                s2t: await OpenCC.Converter({ from: 'cn', to: 'tw' }), // 简体到台湾繁体
-                s2hk: await OpenCC.Converter({ from: 'cn', to: 'hk' }), // 简体到香港繁体
-                t2s: await OpenCC.Converter({ from: 'tw', to: 'cn' }), // 繁体到简体
+            this.opencc = {
+                s2t: await OpenCC.Converter({ from: 'cn', to: 'tw' }),
+                s2hk: await OpenCC.Converter({ from: 'cn', to: 'hk' }),
+                t2s: await OpenCC.Converter({ from: 'tw', to: 'cn' })
             };
         } catch (error) {
-            ErrorHandler.handle(error, 'TextConverter.init');
+            this.handleError(error, 'Utils.init');
+        }
+    }
+
+    static handleError(error, context) {
+        console.warn(`[DMHY Block] Error in ${context}:`, error);
+    }
+
+    static log(message, type = 'info') {
+        const prefix = '[DMHY Block]';
+        switch (type) {
+            case 'info':
+                console.log(`${prefix} ${message}`);
+                break;
+            case 'warn':
+                console.warn(`${prefix} ${message}`);
+                break;
+            case 'error':
+                console.error(`${prefix} ${message}`);
+                break;
+            case 'debug':
+                console.debug(`${prefix} ${message}`);
+                break;
         }
     }
 
@@ -225,26 +250,21 @@ class TextConverter {
             traditionalHK: ''
         };
 
-        // 检查缓存
         const cached = this.cache.get(text);
-        if (cached) {
-            return cached;
-        }
+        if (cached) return cached;
 
         try {
             const result = {
                 original: text,
-                simplified: CONFIG.opencc.t2s?.(text) || text,
-                traditionalTW: CONFIG.opencc.s2t?.(text) || text,
-                traditionalHK: CONFIG.opencc.s2hk?.(text) || text
+                simplified: this.opencc.t2s?.(text) || text,
+                traditionalTW: this.opencc.s2t?.(text) || text,
+                traditionalHK: this.opencc.s2hk?.(text) || text
             };
 
-            // 添加到缓存
             this.addToCache(text, result);
-
             return result;
         } catch (error) {
-            ErrorHandler.handle(error, 'TextConverter.convertText');
+            this.handleError(error, 'Utils.convertText');
             return {
                 original: text,
                 simplified: text,
@@ -255,8 +275,7 @@ class TextConverter {
     }
 
     static addToCache(key, value) {
-        // 如果缓存达到大小限制，删除最早的项
-        if (this.cache.size >= this.cacheSize) {
+        if (this.cache.size >= CONFIG.cache.textConverterSize) {
             const firstKey = this.cache.keys().next().value;
             this.cache.delete(firstKey);
         }
@@ -266,6 +285,24 @@ class TextConverter {
     static clearCache() {
         this.cache.clear();
     }
+
+    static parseKeyword(keyword) {
+        if (typeof keyword === 'string' && keyword.startsWith('/') && keyword.endsWith('/')) {
+            try {
+                return new RegExp(keyword.slice(1, -1));
+            } catch (e) {
+                return keyword;
+            }
+        }
+        return keyword;
+    }
+
+    static formatKeyword(keyword) {
+        if (keyword instanceof RegExp) {
+            return `/${keyword.source}/`;
+        }
+        return keyword;
+    }
 }
 
 /**
@@ -273,15 +310,17 @@ class TextConverter {
  */
 class BlockListManager {
     constructor() {
+        Utils.log('初始化黑名单管理器');
         this.blockList = [];
         this.userNameMap = new Map();
     }
 
     async init() {
+        Utils.log('加载黑名单数据');
         await this.loadBlockList();
-        // 从本地存储加载用户名映射
-        const savedUserNames = GM_getValue('dmhy_username_map', {});
+        const savedUserNames = GM_getValue(CONFIG.storage.usernameMapKey, {});
         this.userNameMap = new Map(Object.entries(savedUserNames));
+        Utils.log(`已加载 ${this.userNameMap.size} 个用户名映射`);
     }
 
     async loadBlockList() {
@@ -296,8 +335,9 @@ class BlockListManager {
                 }
                 return item;
             }) : [];
+            Utils.log(`已加载 ${this.blockList.length} 条黑名单规则`);
         } catch (error) {
-            console.warn(`[DMHY Block] Error in BlockListManager.loadBlockList:`, error);
+            Utils.handleError(error, 'BlockListManager.loadBlockList');
             this.blockList = [];
         }
     }
@@ -322,13 +362,17 @@ class BlockListManager {
                     : item.values
             }));
             GM_setValue(CONFIG.storage.blockListKey, listToSave);
+            Utils.log('黑名单数据已保存');
         } catch (error) {
-            ErrorHandler.handle(error, 'BlockListManager.saveBlockList');
+            Utils.handleError(error, 'BlockListManager.saveBlockList');
         }
     }
 
     addUser(userId, userName) {
-        if (!userId || isNaN(userId)) return false;
+        if (!userId || isNaN(userId)) {
+            Utils.log(`无效的用户ID: ${userId}`, 'warn');
+            return false;
+        }
 
         const userIdList = this.getUserIds();
         if (!userIdList.includes(userId)) {
@@ -336,9 +380,11 @@ class BlockListManager {
             if (userName) {
                 this.userNameMap.set(userId.toString(), userName);
                 this.saveUserNameMap();
+                Utils.log(`已添加用户: ${userName}(${userId})`);
             }
             return true;
         }
+        Utils.log(`用户 ${userId} 已在黑名单中`, 'debug');
         return false;
     }
 
@@ -361,7 +407,7 @@ class BlockListManager {
     }
 
     saveUserNameMap() {
-        GM_setValue('dmhy_username_map', Object.fromEntries(this.userNameMap));
+        GM_setValue(CONFIG.storage.usernameMapKey, Object.fromEntries(this.userNameMap));
     }
 
     async getUserName(userId, forceUpdate = false) {
@@ -400,7 +446,7 @@ class BlockListManager {
                         resolve(userIdStr);
                     }
                 } catch (error) {
-                    ErrorHandler.handle(error, 'BlockListManager.getUserName');
+                    this.handleError(error, 'BlockListManager.getUserName');
                     resolve(userIdStr);
                 }
             };
@@ -419,10 +465,12 @@ class BlockListManager {
  */
 class FilterManager {
     constructor(blockListManager) {
+        Utils.log('初始化过滤管理器');
         this.blockListManager = blockListManager;
     }
 
     init() {
+        Utils.log('应用过滤规则');
         this.applyFilters();
     }
 
@@ -431,16 +479,23 @@ class FilterManager {
             document.querySelectorAll(`${CONFIG.selectors.torrentList}[style*='display: none']`)
                 .forEach(elem => elem.style.display = '');
 
-            if (!this.blockListManager.blockList.length) return;
+            if (!this.blockListManager.blockList.length) {
+                Utils.log('没有黑名单规则，跳过过滤');
+                return;
+            }
 
             const blockedUserIds = this.blockListManager.getUserIds();
             const blockedKeywords = this.blockListManager.getKeywords();
 
-            if (!blockedUserIds.length && !blockedKeywords.length) return;
+            if (!blockedUserIds.length && !blockedKeywords.length) {
+                Utils.log('黑名单为空，跳过过滤');
+                return;
+            }
 
+            Utils.log(`开始过滤: ${blockedUserIds.length} 个用户ID, ${blockedKeywords.length} 个关键词`);
             this.filterTorrentList(blockedUserIds, blockedKeywords);
         } catch (error) {
-            console.warn(`[DMHY Block] Error in FilterManager.applyFilters:`, error);
+            Utils.handleError(error, 'FilterManager.applyFilters');
         }
     }
 
@@ -461,7 +516,7 @@ class FilterManager {
                     n++;
                 }
             } catch (error) {
-                ErrorHandler.handle(error, 'FilterManager.filterTorrentList.item');
+                this.handleError(error, 'FilterManager.filterTorrentList.item');
             }
         });
     }
@@ -483,12 +538,12 @@ class FilterManager {
         if (blockedUserIds.includes(userId)) return true;
 
         // 转换标题为简繁体版本
-        const { original, simplified, traditionalTW, traditionalHK } = TextConverter.convertText(title);
+        const { original, simplified, traditionalTW, traditionalHK } = Utils.convertText(title);
 
         return blockedKeywords.some(keyword => {
             if (typeof keyword === 'string') {
                 // 将关键词也转换为简繁体
-                const keywordVariants = TextConverter.convertText(keyword);
+                const keywordVariants = Utils.convertText(keyword);
                 const lowerKeyword = keyword.toLowerCase();
 
                 // 检查所有变体是否匹配
@@ -527,7 +582,7 @@ class UIManager {
 
     addBlocklistUI() {
         const uiHtml = `
-            <div id="dmhy-blocklist-ui" style="${CONFIG.styles.blocklistUI}">
+            <div id="dmhy-blocklist-ui" style="${STYLES.blocklistUI}">
                 <button id="show-blocklist">管理种子黑名单</button>
             </div>
         `;
@@ -539,7 +594,7 @@ class UIManager {
 
     async showBlocklistManager() {
         const managerHtml = `
-            <div id="blocklist-manager" style="${CONFIG.styles.manager}">
+            <div id="blocklist-manager" style="${STYLES.manager}">
                 <h3 style="margin-top:0;">管理种子黑名单</h3>
                 <div style="margin-bottom:10px;">
                     <label>已屏蔽用户：</label><br>
@@ -722,7 +777,7 @@ class UIManager {
                         document.getElementById('user-ids').value = newValue;
                 }
             } catch (error) {
-                    ErrorHandler.handle(error, 'UIManager.updateMissingUserNames');
+                    this.handleError(error, 'UIManager.updateMissingUserNames');
             }
             await new Promise(resolve => setTimeout(resolve, 500));
         }
@@ -917,7 +972,7 @@ class UIManager {
                     console.log(`[DMHY Block] 成功获取用户名: ${userName}(${userId})`);
                 }
             } catch (error) {
-                ErrorHandler.handle(error, 'UIManager.processUserNameQueue');
+                this.handleError(error, 'UIManager.processUserNameQueue');
             }
             await new Promise(resolve => setTimeout(resolve, 500));
         }
@@ -1133,7 +1188,7 @@ class AdBlocker {
                     }
                 });
             } catch (error) {
-                ErrorHandler.handle(error, 'AdBlocker.hideAds');
+                this.handleError(error, 'AdBlocker.hideAds');
             }
         });
     }
@@ -1165,13 +1220,13 @@ class EventManager {
  */
 class GitHubSyncManager {
     constructor(blockListManager) {
+        Utils.log('初始化 GitHub 同步管理器');
         this.blockListManager = blockListManager;
-        this.token = GM_getValue('github_token', '');
-        this.gistId = GM_getValue('github_gist_id', '');
-        this.isContributing = GM_getValue('is_contributing', false);
-        this.githubUser = GM_getValue('github_user', '');
-        // 固定的公共统计池 Gist ID
-        this.publicStatsGistId = 'c2df1ecfe5d04f3f2cfb92fd206d4884';
+        this.token = GM_getValue(CONFIG.storage.githubTokenKey, '');
+        this.gistId = GM_getValue(CONFIG.storage.githubGistIdKey, '');
+        this.isContributing = GM_getValue(CONFIG.storage.isContributingKey, false);
+        this.githubUser = GM_getValue(CONFIG.storage.githubUserKey, '');
+        this.publicStatsGistId = CONFIG.github.publicStatsGistId;
     }
 
     async init() {
@@ -1182,6 +1237,7 @@ class GitHubSyncManager {
 
     async validateToken() {
         try {
+            Utils.log('验证 GitHub Token');
             const response = await fetch('https://api.github.com/user', {
                 headers: {
                     'Authorization': `token ${this.token}`,
@@ -1192,17 +1248,92 @@ class GitHubSyncManager {
             if (response.ok) {
                 const userData = await response.json();
                 this.githubUser = userData.login;
-                GM_setValue('github_user', this.githubUser);
+                GM_setValue(CONFIG.storage.githubUserKey, this.githubUser);
+                Utils.log(`GitHub 用户验证成功: ${this.githubUser}`);
                 return true;
             } else {
+                Utils.log('GitHub Token 无效', 'warn');
                 this.token = '';
                 this.githubUser = '';
-                GM_setValue('github_token', '');
-                GM_setValue('github_user', '');
+                GM_setValue(CONFIG.storage.githubTokenKey, '');
+                GM_setValue(CONFIG.storage.githubUserKey, '');
                 return false;
             }
         } catch (error) {
-            console.error('[DMHY Block] GitHub token validation error:', error);
+            Utils.log('GitHub Token 验证失败', 'error');
+            return false;
+        }
+    }
+
+    async findExistingGist() {
+        try {
+            const response = await fetch('https://api.github.com/gists', {
+                headers: {
+                    'Authorization': `token ${this.token}`,
+                    'Accept': 'application/vnd.github.v3+json'
+                }
+            });
+
+            if (response.ok) {
+                const gists = await response.json();
+                const existingGist = gists.find(gist => gist.description === CONFIG.github.gistDescription);
+                if (existingGist) {
+                    this.gistId = existingGist.id;
+                    GM_setValue(CONFIG.storage.githubGistIdKey, this.gistId);
+                    return true;
+                }
+            }
+            return false;
+        } catch (error) {
+            console.error('[DMHY Block] 查找 Gist 失败:', error);
+            return false;
+        }
+    }
+
+    getBlockListData() {
+        return {
+            userIds: this.blockListManager.getUserIds(),
+            keywords: this.blockListManager.getKeywords().map(k => 
+                k instanceof RegExp ? `/${k.source}/` : k
+            ),
+            lastUpdate: new Date().toISOString()
+        };
+    }
+
+    async createGist() {
+        try {
+            // 先检查是否已存在 Gist
+            if (await this.findExistingGist()) {
+                return true;
+            }
+
+            // 如果没有找到现有 Gist，创建新的
+            const createResponse = await fetch('https://api.github.com/gists', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `token ${this.token}`,
+                    'Accept': 'application/vnd.github.v3+json'
+                },
+                body: JSON.stringify({
+                    description: CONFIG.github.gistDescription,
+                    public: false,
+                    files: {
+                        'blocklist.json': {
+                            content: JSON.stringify(this.getBlockListData())
+                        }
+                    }
+                })
+            });
+
+            if (createResponse.ok) {
+                const gist = await createResponse.json();
+                this.gistId = gist.id;
+                GM_setValue(CONFIG.storage.githubGistIdKey, this.gistId);
+                return true;
+            }
+            return false;
+        } catch (error) {
+            console.error('[DMHY Block] Create gist error:', error);
             return false;
         }
     }
@@ -1222,13 +1353,7 @@ class GitHubSyncManager {
                 body: JSON.stringify({
                     files: {
                         'blocklist.json': {
-                            content: JSON.stringify({
-                                userIds: this.blockListManager.getUserIds(),
-                                keywords: this.blockListManager.getKeywords().map(k => 
-                                    k instanceof RegExp ? `/${k.source}/` : k
-                                ),
-                                lastUpdate: new Date().toISOString()
-                            })
+                            content: JSON.stringify(this.getBlockListData())
                         }
                     }
                 })
@@ -1236,10 +1361,9 @@ class GitHubSyncManager {
 
             if (!response.ok) {
                 console.error('[DMHY Block] 更新 Gist 失败:', response.status);
-                // 如果 Gist 不存在，清除 ID 并重新创建
                 if (response.status === 404) {
                     this.gistId = '';
-                    GM_setValue('github_gist_id', '');
+                    GM_setValue(CONFIG.storage.githubGistIdKey, '');
                     return await this.createGist();
                 }
                 return false;
@@ -1252,95 +1376,17 @@ class GitHubSyncManager {
         }
     }
 
-    async createGist() {
-        try {
-            // 先检查是否已存在 Gist
-            const response = await fetch('https://api.github.com/gists', {
-                headers: {
-                    'Authorization': `token ${this.token}`,
-                    'Accept': 'application/vnd.github.v3+json'
-                }
-            });
-
-            if (response.ok) {
-                const gists = await response.json();
-                // 查找描述为 'DMHY Block List Sync' 的 Gist
-                const existingGist = gists.find(gist => gist.description === 'DMHY Block List Sync');
-                if (existingGist) {
-                    this.gistId = existingGist.id;
-                    GM_setValue('github_gist_id', this.gistId);
-                    return true;
-                }
-            }
-
-            // 如果没有找到现有 Gist，创建新的
-            const createResponse = await fetch('https://api.github.com/gists', {
-                method: 'POST',
-                headers: {
-                    'Authorization': `token ${this.token}`,
-                    'Accept': 'application/vnd.github.v3+json'
-                },
-                body: JSON.stringify({
-                    description: 'DMHY Block List Sync',
-                    public: false,
-                    files: {
-                        'blocklist.json': {
-                            content: JSON.stringify({
-                                userIds: this.blockListManager.getUserIds(),
-                                keywords: this.blockListManager.getKeywords().map(k => 
-                                    k instanceof RegExp ? `/${k.source}/` : k
-                                ),
-                                lastUpdate: new Date().toISOString()
-                            })
-                        }
-                    }
-                })
-            });
-
-            if (createResponse.ok) {
-                const gist = await createResponse.json();
-                this.gistId = gist.id;
-                GM_setValue('github_gist_id', this.gistId);
-                return true;
-            }
-            return false;
-        } catch (error) {
-            console.error('[DMHY Block] Create gist error:', error);
-            return false;
-        }
-    }
-
     async syncFromGist() {
         if (!this.gistId) {
-            // 如果没有 Gist ID，先尝试查找现有的 Gist
-            try {
-                const response = await fetch('https://api.github.com/gists', {
-                    headers: {
-                        'Authorization': `token ${this.token}`,
-                        'Accept': 'application/vnd.github.v3+json'
-                    }
-                });
-
-                if (response.ok) {
-                    const gists = await response.json();
-                    // 查找描述为 'DMHY Block List Sync' 的 Gist
-                    const existingGist = gists.find(gist => gist.description === 'DMHY Block List Sync');
-                    if (existingGist) {
-                        this.gistId = existingGist.id;
-                        GM_setValue('github_gist_id', this.gistId);
-                    } else {
-                        return false;
-                    }
-                } else {
-                    return false;
-                }
-            } catch (error) {
-                console.error('[DMHY Block] 查找 Gist 失败:', error);
+            Utils.log('未找到 Gist ID，尝试查找现有 Gist');
+            if (!await this.findExistingGist()) {
+                Utils.log('未找到现有 Gist', 'warn');
                 return false;
             }
         }
 
         try {
+            Utils.log(`从 Gist ${this.gistId} 同步数据`);
             const response = await fetch(`https://api.github.com/gists/${this.gistId}`, {
                 headers: {
                     'Authorization': `token ${this.token}`,
@@ -1349,12 +1395,10 @@ class GitHubSyncManager {
             });
 
             if (!response.ok) {
-                console.error('[DMHY Block] 从 Gist 同步失败:', response.status);
-                // 如果 Gist 不存在，清除 ID 并重新查找
+                Utils.log(`从 Gist 同步失败: ${response.status}`, 'error');
                 if (response.status === 404) {
                     this.gistId = '';
-                    GM_setValue('github_gist_id', '');
-                    // 重新调用 syncFromGist 来查找 Gist
+                    GM_setValue(CONFIG.storage.githubGistIdKey, '');
                     return await this.syncFromGist();
                 }
                 return false;
@@ -1375,9 +1419,10 @@ class GitHubSyncManager {
                 return k;
             }));
 
+            Utils.log('Gist 同步成功');
             return true;
         } catch (error) {
-            console.error('[DMHY Block] Sync from gist error:', error);
+            Utils.log('Gist 同步失败', 'error');
             return false;
         }
     }
@@ -1618,12 +1663,12 @@ class GitHubSyncManager {
 
     setToken(token) {
         this.token = token;
-        GM_setValue('github_token', token);
+        GM_setValue(CONFIG.storage.githubTokenKey, token);
     }
 
     setContributing(isContributing) {
         this.isContributing = isContributing;
-        GM_setValue('is_contributing', isContributing);
+        GM_setValue(CONFIG.storage.isContributingKey, isContributing);
     }
 }
 
@@ -1633,17 +1678,21 @@ class GitHubSyncManager {
 class App {
     static async init() {
         try {
-            // 初始化文字转换器
-        await TextConverter.init();
+            Utils.log('初始化应用');
+            await Utils.init();
+            Utils.log('文字转换器初始化完成');
 
             AdBlocker.init();
+            Utils.log('广告拦截器初始化完成');
 
             const blockListManager = new BlockListManager();
             await blockListManager.init();
+            Utils.log('黑名单管理器初始化完成');
 
             const filterManager = new FilterManager(blockListManager);
             const githubSyncManager = new GitHubSyncManager(blockListManager);
             await githubSyncManager.init();
+            Utils.log('GitHub 同步管理器初始化完成');
 
             const uiManager = new UIManager(blockListManager, filterManager, githubSyncManager);
             const eventManager = new EventManager(filterManager);
@@ -1651,8 +1700,10 @@ class App {
             uiManager.init();
             filterManager.init();
             eventManager.init();
+            Utils.log('应用初始化完成');
         } catch (error) {
-            console.warn(`[DMHY Block] Error in App.init:`, error);
+            Utils.log('应用初始化失败', 'error');
+            Utils.handleError(error, 'App.init');
         }
     }
 }
