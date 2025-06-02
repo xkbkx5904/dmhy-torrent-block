@@ -2,7 +2,7 @@
 // @name:zh-CN   动漫花园种子屏蔽助手
 // @name         DMHY Torrent Block
 // @namespace    https://github.com/xkbkx5904
-// @version      1.3.1
+// @version      1.3.2
 // @author       xkbkx5904
 // @description  Enhanced version of DMHY Block script with more features: UI management, regex filtering, context menu, ad blocking, and GitHub sync
 // @description:zh-CN  增强版的动漫花园资源屏蔽工具，支持用户界面管理、右键發佈人添加ID到黑名单、简繁体标题匹配、正则表达式过滤、广告屏蔽和GitHub同步等功能
@@ -24,6 +24,11 @@
 
 /*
 更新日志：
+v1.3.2
+- 增强隐私保护：使用匿名ID替代GitHub用户名
+- 优化公共统计池的数据结构
+- 改进贡献者身份识别机制
+
 v1.3.1
 - 优化公共统计池显示效果
 - 添加用户名自动获取和缓存功能
@@ -1299,17 +1304,20 @@ class GitHubSyncManager {
                 const gist = await response.json();
                 const content = JSON.parse(gist.files['stats.json'].content);
                 
+                // 生成匿名贡献者ID
+                const anonymousId = this.generateAnonymousId();
+                
                 // 更新或添加当前用户的贡献
-                const contributorIndex = content.contributors.findIndex(c => c.user === this.githubUser);
+                const contributorIndex = content.contributors.findIndex(c => c.anonymousId === anonymousId);
                 if (contributorIndex >= 0) {
                     content.contributors[contributorIndex] = {
-                        user: this.githubUser,
+                        anonymousId: anonymousId,
                         userIds: userIds,
                         lastUpdate: new Date().toISOString()
                     };
                 } else {
                     content.contributors.push({
-                        user: this.githubUser,
+                        anonymousId: anonymousId,
                         userIds: userIds,
                         lastUpdate: new Date().toISOString()
                     });
@@ -1317,23 +1325,36 @@ class GitHubSyncManager {
 
                 // 更新 Gist
                 await fetch(`https://api.github.com/gists/${this.publicStatsGistId}`, {
-                        method: 'PATCH',
-                        headers: {
-                            'Authorization': `token ${this.token}`,
+                    method: 'PATCH',
+                    headers: {
+                        'Authorization': `token ${this.token}`,
                         'Accept': 'application/vnd.github.v3+json'
-                        },
-                        body: JSON.stringify({
-                            files: {
-                                'stats.json': {
-                                    content: JSON.stringify(content)
-                                }
+                    },
+                    body: JSON.stringify({
+                        files: {
+                            'stats.json': {
+                                content: JSON.stringify(content)
                             }
-                        })
-                    });
-                    }
+                        }
+                    })
+                });
+            }
         } catch (error) {
             console.error('[DMHY Block] Contribute to public stats error:', error);
         }
+    }
+
+    generateAnonymousId() {
+        // 使用 GitHub 用户名和固定盐值生成匿名ID
+        const salt = 'dmhy_block_salt';
+        const data = this.githubUser + salt;
+        let hash = 0;
+        for (let i = 0; i < data.length; i++) {
+            const char = data.charCodeAt(i);
+            hash = ((hash << 5) - hash) + char;
+            hash = hash & hash;
+        }
+        return 'anon_' + Math.abs(hash).toString(16);
     }
 
     async getPublicStats() {
