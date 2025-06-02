@@ -2,7 +2,7 @@
 // @name:zh-CN   动漫花园种子屏蔽助手
 // @name         DMHY Torrent Block
 // @namespace    https://github.com/xkbkx5904
-// @version      1.3.1
+// @version      1.3.4
 // @author       xkbkx5904
 // @description  Enhanced version of DMHY Block script with more features: UI management, regex filtering, context menu, ad blocking, and GitHub sync
 // @description:zh-CN  增强版的动漫花园资源屏蔽工具，支持用户界面管理、右键發佈人添加ID到黑名单、简繁体标题匹配、正则表达式过滤、广告屏蔽和GitHub同步等功能
@@ -24,6 +24,11 @@
 
 /*
 更新日志：
+v1.3.4
+- 优化公共统计池的JSON数据格式
+- 改进数据可读性，添加缩进和换行
+- 优化数据存储结构
+
 v1.3.1
 - 优化公共统计池显示效果
 - 添加用户名自动获取和缓存功能
