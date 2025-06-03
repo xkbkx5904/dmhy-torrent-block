@@ -2,10 +2,10 @@
 // @name:zh-CN   动漫花园种子屏蔽助手
 // @name         DMHY Torrent Block
 // @namespace    https://github.com/xkbkx5904
-// @version      1.3.6
+// @version      1.3.8
 // @author       xkbkx5904
-// @description  Enhanced version of DMHY Block script with more features: UI management, regex filtering, context menu, ad blocking, and GitHub sync
-// @description:zh-CN  增强版的动漫花园资源屏蔽工具，支持用户界面管理、右键發佈人添加ID到黑名单、简繁体标题匹配、正则表达式过滤、广告屏蔽和GitHub同步等功能
+// @description  Enhanced version of DMHY Block script with more features: title display management, user interface management, regex filtering, context menu, ad blocking, and GitHub sync
+// @description:zh-CN  增强版的动漫花园资源屏蔽工具，支持标题显示管理（简繁体切换）、用户界面管理、正则表达式过滤、右键菜单、广告屏蔽和GitHub同步等功能。提供标题过滤、云端数据同步、公共统计池和用户排行榜等特性。
 // @homepage     https://github.com/xkbkx5904/dmhy-torrent-block
 // @supportURL   https://github.com/xkbkx5904/dmhy-torrent-block/issues
 // @match        *://share.dmhy.org/*
@@ -24,6 +24,19 @@
 
 /*
 更新日志：
+v1.3.8
+- 重构 TitleManager 和 UIManager 类，优化代码结构
+- 移除重复的标题显示管理代码
+- 改进类之间的依赖关系
+- 优化事件监听器的绑定逻辑
+- 提升代码可维护性和性能
+
+v1.3.7
+- 重构标题管理功能，创建独立的 TitleManager 类
+- 优化简繁体切换功能，支持实时切换
+- 改进代码结构，提高可维护性
+- 统一缓存管理，创建 CacheManager 类
+
 v1.3.6
 - 添加详细的日志输出系统
 - 优化错误处理和提示信息
@@ -74,13 +87,13 @@ v1.2.1
 - 修复opencc依赖问题
 
 v1.2.0
-- 添加简繁体标题匹配功能
+- 添加简繁体标题过滤功能
 - 集成OpenCC实现准确的简繁体转换
-- 优化关键词匹配逻辑，支持不区分简繁体
+- 优化关键词过滤逻辑，支持不区分简繁体
 
 v1.1.6
 - 修复关键词输入单个斜杠时的验证问题
-- 优化关键词处理逻辑，将单个斜杠视为普通字符串匹配
+- 优化关键词处理逻辑，将单个斜杠视为普通字符串过滤
 - 改进管理界面，已有内容时自动在末尾添加分号，方便添加新内容
 
 v1.1.5
@@ -198,10 +211,38 @@ const STYLES = {
 };
 
 /**
+ * 缓存管理类
+ */
+class CacheManager {
+    constructor() {
+        this.caches = new Map();
+        this.maxSize = 200;
+    }
+
+    get(cacheName, key) {
+        const cache = this.caches.get(cacheName);
+        return cache?.get(key);
+    }
+
+    set(cacheName, key, value) {
+        if (!this.caches.has(cacheName)) {
+            this.caches.set(cacheName, new Map());
+        }
+        const cache = this.caches.get(cacheName);
+        
+        if (cache.size >= this.maxSize) {
+            const firstKey = cache.keys().next().value;
+            cache.delete(firstKey);
+        }
+        cache.set(key, value);
+    }
+}
+
+/**
  * 工具类
  */
 class Utils {
-    static cache = new Map();
+    static cacheManager = new CacheManager();
     static opencc = {
         s2t: null,
         s2hk: null,
@@ -250,7 +291,7 @@ class Utils {
             traditionalHK: ''
         };
 
-        const cached = this.cache.get(text);
+        const cached = this.cacheManager.get('textConverter', text);
         if (cached) return cached;
 
         try {
@@ -261,7 +302,7 @@ class Utils {
                 traditionalHK: this.opencc.s2hk?.(text) || text
             };
 
-            this.addToCache(text, result);
+            this.cacheManager.set('textConverter', text, result);
             return result;
         } catch (error) {
             this.handleError(error, 'Utils.convertText');
@@ -272,18 +313,6 @@ class Utils {
                 traditionalHK: text
             };
         }
-    }
-
-    static addToCache(key, value) {
-        if (this.cache.size >= CONFIG.cache.textConverterSize) {
-            const firstKey = this.cache.keys().next().value;
-            this.cache.delete(firstKey);
-        }
-        this.cache.set(key, value);
-    }
-
-    static clearCache() {
-        this.cache.clear();
     }
 
     static parseKeyword(keyword) {
@@ -330,7 +359,7 @@ class BlockListManager {
                 if (item.type === 'keywords') {
                     return {
                         type: 'keywords',
-                        values: item.values.map(this.parseKeyword)
+                        values: item.values.map(Utils.parseKeyword)
                     };
                 }
                 return item;
@@ -340,17 +369,6 @@ class BlockListManager {
             Utils.handleError(error, 'BlockListManager.loadBlockList');
             this.blockList = [];
         }
-    }
-
-    parseKeyword(keyword) {
-        if (typeof keyword === 'string' && keyword.startsWith('/') && keyword.endsWith('/')) {
-            try {
-                return new RegExp(keyword.slice(1, -1));
-            } catch (e) {
-                return keyword;
-            }
-        }
-        return keyword;
     }
 
     saveBlockList() {
@@ -416,7 +434,6 @@ class BlockListManager {
         const userIdStr = userId.toString();
         const cachedName = this.userNameMap.get(userIdStr);
         
-        // 如果本地已有用户名且不强制更新，直接返回
         if (cachedName && !forceUpdate) return cachedName;
 
         const userLink = document.querySelector(`a[href="/topics/list/user_id/${userId}"]`);
@@ -446,7 +463,7 @@ class BlockListManager {
                         resolve(userIdStr);
                     }
                 } catch (error) {
-                    this.handleError(error, 'BlockListManager.getUserName');
+                    Utils.handleError(error, 'BlockListManager.getUserName');
                     resolve(userIdStr);
                 }
             };
@@ -461,17 +478,103 @@ class BlockListManager {
 }
 
 /**
+ * 标题管理类
+ */
+class TitleManager {
+    constructor() {
+        this.displayMode = GM_getValue('dmhy_title_display_mode', 'original');
+    }
+
+    init() {
+        // 初始化时应用标题显示模式
+        this.updateAllTitles();
+    }
+
+    getDisplayModeText() {
+        switch (this.displayMode) {
+            case 'simplified':
+                return '简体';
+            case 'traditional':
+                return '繁体';
+            default:
+                return '原文';
+        }
+    }
+
+    toggleTitleDisplay() {
+        const modes = ['original', 'simplified', 'traditional'];
+        const currentIndex = modes.indexOf(this.displayMode);
+        this.displayMode = modes[(currentIndex + 1) % modes.length];
+        GM_setValue('dmhy_title_display_mode', this.displayMode);
+        this.updateAllTitles();
+    }
+
+    updateAllTitles() {
+        document.querySelectorAll(CONFIG.selectors.titleCell).forEach(cell => {
+            const originalTitle = cell.getAttribute('data-original-title') || cell.textContent;
+            if (!cell.hasAttribute('data-original-title')) {
+                cell.setAttribute('data-original-title', originalTitle);
+            }
+
+            const { simplified, traditionalTW } = Utils.convertText(originalTitle);
+            
+            switch (this.displayMode) {
+                case 'simplified':
+                    cell.textContent = simplified;
+                    break;
+                case 'traditional':
+                    cell.textContent = traditionalTW;
+                    break;
+                default:
+                    cell.textContent = originalTitle;
+            }
+        });
+    }
+
+    shouldHideByTitle(title, blockedKeywords) {
+        const { original, simplified, traditionalTW, traditionalHK } = Utils.convertText(title);
+
+        return blockedKeywords.some(keyword => {
+            if (typeof keyword === 'string') {
+                const keywordVariants = Utils.convertText(keyword);
+                const lowerKeyword = keyword.toLowerCase();
+
+                return [original, simplified, traditionalTW, traditionalHK].some(variant =>
+                    variant.toLowerCase().includes(lowerKeyword) ||
+                    variant.toLowerCase().includes(keywordVariants.simplified.toLowerCase()) ||
+                    variant.toLowerCase().includes(keywordVariants.traditionalTW.toLowerCase()) ||
+                    variant.toLowerCase().includes(keywordVariants.traditionalHK.toLowerCase())
+                );
+            }
+            return keyword instanceof RegExp && (
+                original.match(keyword) ||
+                simplified.match(keyword) ||
+                traditionalTW.match(keyword) ||
+                traditionalHK.match(keyword)
+            );
+        });
+    }
+}
+
+/**
  * 过滤管理类
  */
 class FilterManager {
-    constructor(blockListManager) {
+    constructor(blockListManager, titleManager) {
         Utils.log('初始化过滤管理器');
         this.blockListManager = blockListManager;
+        this.titleManager = titleManager;
     }
 
     init() {
         Utils.log('应用过滤规则');
         this.applyFilters();
+        // 初始化时应用标题显示模式
+        this.uiManager?.updateAllTitles();
+    }
+
+    setUIManager(uiManager) {
+        this.uiManager = uiManager;
     }
 
     applyFilters() {
@@ -516,9 +619,12 @@ class FilterManager {
                     n++;
                 }
             } catch (error) {
-                this.handleError(error, 'FilterManager.filterTorrentList.item');
+                Utils.handleError(error, 'FilterManager.filterTorrentList.item');
             }
         });
+
+        // 过滤后更新标题显示
+        this.uiManager?.updateAllTitles();
     }
 
     extractItemInfo(elem) {
@@ -536,32 +642,7 @@ class FilterManager {
 
     shouldHideItem(userId, title, blockedUserIds, blockedKeywords) {
         if (blockedUserIds.includes(userId)) return true;
-
-        // 转换标题为简繁体版本
-        const { original, simplified, traditionalTW, traditionalHK } = Utils.convertText(title);
-
-        return blockedKeywords.some(keyword => {
-            if (typeof keyword === 'string') {
-                // 将关键词也转换为简繁体
-                const keywordVariants = Utils.convertText(keyword);
-                const lowerKeyword = keyword.toLowerCase();
-
-                // 检查所有变体是否匹配
-                return [original, simplified, traditionalTW, traditionalHK].some(variant =>
-                    variant.toLowerCase().includes(lowerKeyword) ||
-                    variant.toLowerCase().includes(keywordVariants.simplified.toLowerCase()) ||
-                    variant.toLowerCase().includes(keywordVariants.traditionalTW.toLowerCase()) ||
-                    variant.toLowerCase().includes(keywordVariants.traditionalHK.toLowerCase())
-                );
-            }
-            // 正则表达式匹配所有变体
-            return keyword instanceof RegExp && (
-                original.match(keyword) ||
-                simplified.match(keyword) ||
-                traditionalTW.match(keyword) ||
-                traditionalHK.match(keyword)
-            );
-        });
+        return this.titleManager.shouldHideByTitle(title, blockedKeywords);
     }
 }
 
@@ -569,10 +650,54 @@ class FilterManager {
  * UI管理类
  */
 class UIManager {
-    constructor(blockListManager, filterManager, githubSyncManager) {
+    constructor(blockListManager, filterManager, githubSyncManager, titleManager) {
         this.blockListManager = blockListManager;
         this.filterManager = filterManager;
         this.githubSyncManager = githubSyncManager;
+        this.titleManager = titleManager;
+        this.uiTexts = {
+            manageButton: '管理种子黑名单',
+            toggleButton: '切换标题显示：',
+            simplified: '简体',
+            traditional: '繁体',
+            original: '原文',
+            blockedUsers: '已屏蔽用户：',
+            titleKeywords: '标题关键词（用分号分隔）：',
+            keywordTips: [
+                '提示：支持普通关键词和正则表达式',
+                '- 普通关键词直接输入，用分号分隔',
+                '- 正则表达式用 / 包裹，例如：/\\d+话/',
+                '- 示例：关键词1；/\\d+话/；关键词2'
+            ],
+            userIdTips: [
+                '提示：用户ID输入规则：',
+                '- 支持纯数字ID，如：123456',
+                '- 支持用户名(ID)格式，如：用户名(123456)',
+                '- 多个ID之间用分号分隔'
+            ],
+            save: '保存',
+            close: '关闭',
+            githubSync: 'GitHub 同步',
+            login: '登录',
+            getTokenGuide: '获取 Token 指南',
+            howToGetToken: '如何获取 GitHub Token：',
+            tokenSteps: [
+                '点击下方按钮打开 GitHub Token 设置页面',
+                '点击 "Generate new token (classic)"',
+                '在 Note 中输入描述（如：DMHY Block）',
+                '在 Select scopes 中勾选 "gist"',
+                '点击底部的 "Generate token" 按钮',
+                '复制生成的 token 并粘贴到上方输入框'
+            ],
+            openTokenPage: '打开 Token 设置页面 →',
+            loggedInAs: '已登录为：',
+            logout: '退出',
+            syncToGithub: '同步到 GitHub',
+            syncFromGithub: '从 GitHub 同步',
+            contributeStats: '贡献到公共统计池（用于生成黑名单用户排行榜）',
+            userRanking: '黑名单用户排行榜',
+            lastUpdate: '最后更新：'
+        };
     }
 
     init() {
@@ -580,97 +705,138 @@ class UIManager {
         this.addContextMenu();
     }
 
+    getDisplayModeText() {
+        return this.titleManager.getDisplayModeText();
+    }
+
+    convertText(text) {
+        if (this.titleManager.displayMode === 'original') {
+            return text;
+        }
+        const { simplified, traditionalTW } = Utils.convertText(text);
+        return this.titleManager.displayMode === 'simplified' ? simplified : traditionalTW;
+    }
+
+    convertTextArray(texts) {
+        return texts.map(text => this.convertText(text));
+    }
+
+    updateUITexts() {
+        const showBlocklistBtn = document.getElementById('show-blocklist');
+        const toggleTitleBtn = document.getElementById('toggle-title-display');
+        
+        if (showBlocklistBtn) {
+            showBlocklistBtn.textContent = this.convertText(this.uiTexts.manageButton);
+        }
+        if (toggleTitleBtn) {
+            toggleTitleBtn.textContent = this.convertText(this.uiTexts.toggleButton) + this.getDisplayModeText();
+        }
+    }
+
+    toggleTitleDisplay() {
+        this.titleManager.toggleTitleDisplay();
+        this.updateUITexts();
+    }
+
     addBlocklistUI() {
+        // 如果已经存在UI，先移除
+        const existingUI = document.getElementById('dmhy-blocklist-ui');
+        if (existingUI) {
+            existingUI.remove();
+        }
+
         const uiHtml = `
             <div id="dmhy-blocklist-ui" style="${STYLES.blocklistUI}">
-                <button id="show-blocklist">管理种子黑名单</button>
+                <button id="show-blocklist">${this.convertText(this.uiTexts.manageButton)}</button>
+                <button id="toggle-title-display" style="margin-left:10px;">${this.convertText(this.uiTexts.toggleButton)}${this.getDisplayModeText()}</button>
             </div>
         `;
         document.body.insertAdjacentHTML('beforeend', uiHtml);
 
-        document.getElementById('show-blocklist')?.addEventListener('click',
-            () => this.showBlocklistManager());
+        // 确保在DOM加载完成后再绑定事件
+        setTimeout(() => {
+            const showBlocklistBtn = document.getElementById('show-blocklist');
+            const toggleTitleBtn = document.getElementById('toggle-title-display');
+            
+            showBlocklistBtn?.addEventListener('click', () => this.showBlocklistManager());
+            toggleTitleBtn?.addEventListener('click', () => this.toggleTitleDisplay());
+        }, 0);
     }
 
     async showBlocklistManager() {
+        // 如果已经存在管理界面，先移除
+        const existingManager = document.getElementById('blocklist-manager');
+        const existingOverlay = document.getElementById('blocklist-overlay');
+        if (existingManager) existingManager.remove();
+        if (existingOverlay) existingOverlay.remove();
+
         const managerHtml = `
             <div id="blocklist-manager" style="${STYLES.manager}">
-                <h3 style="margin-top:0;">管理种子黑名单</h3>
+                <h3 style="margin-top:0;">${this.convertText(this.uiTexts.manageButton)}</h3>
                 <div style="margin-bottom:10px;">
-                    <label>已屏蔽用户：</label><br>
+                    <label>${this.convertText(this.uiTexts.blockedUsers)}</label><br>
                     <textarea id="user-ids" style="width:100%;height:100px;margin-top:5px;resize:none;border:1px solid #ccc;"></textarea>
                     <div id="user-ids-error" style="color:red;font-size:12px;margin-top:3px;display:none;"></div>
                 </div>
                 <div style="margin-bottom:10px;">
-                    <label>标题关键词（用分号分隔）：</label><br>
+                    <label>${this.convertText(this.uiTexts.titleKeywords)}</label><br>
                     <textarea id="keywords" style="width:100%;height:100px;margin-top:5px;resize:none;border:1px solid #ccc;"></textarea>
                     <div id="keywords-error" style="color:red;font-size:12px;margin-top:3px;display:none;"></div>
                 </div>
                 <div style="display:flex;justify-content:space-between;color:#666;font-size:12px;margin-top:5px;">
                     <div style="flex:1;margin-right:10px;">
-                        提示：支持普通关键词和正则表达式<br>
-                        - 普通关键词直接输入，用分号分隔<br>
-                        - 正则表达式用 / 包裹，例如：/\\d+话/<br>
-                        - 示例：关键词1；/\\d+话/；关键词2
+                        ${this.convertTextArray(this.uiTexts.keywordTips).join('<br>')}
                     </div>
                     <div style="flex:1;margin-left:10px;">
-                        提示：用户ID输入规则：<br>
-                        - 支持纯数字ID，如：123456<br>
-                        - 支持用户名(ID)格式，如：用户名(123456)<br>
-                        - 多个ID之间用分号分隔
+                        ${this.convertTextArray(this.uiTexts.userIdTips).join('<br>')}
                     </div>
                 </div>
                 <div style="margin-top:10px;text-align:right;">
-                    <button id="save-blocklist" style="padding:5px 15px;">保存</button>
-                    <button id="close-manager" style="padding:5px 15px;margin-left:10px;">关闭</button>
+                    <button id="save-blocklist" style="padding:5px 15px;">${this.convertText(this.uiTexts.save)}</button>
+                    <button id="close-manager" style="padding:5px 15px;margin-left:10px;">${this.convertText(this.uiTexts.close)}</button>
                 </div>
                 <div style="margin-top:20px;border-top:1px solid #ccc;padding-top:10px;">
                     <h4 style="margin:0 0 10px 0;">GitHub 同步</h4>
                     <div id="github-login-section" style="display:none;">
                         <div style="margin-bottom:10px;">
                             <input type="text" id="github-token" placeholder="GitHub Personal Access Token" style="width:100%;margin-bottom:10px;padding:5px;">
-                            <button id="github-login" style="padding:5px 15px;">登录</button>
+                            <button id="github-login" style="padding:5px 15px;">${this.convertText(this.uiTexts.login)}</button>
                             <button id="get-token-guide" style="padding:5px 15px;margin-left:10px;background-color:#2ea44f;color:white;border:none;cursor:pointer;">
-                                获取 Token 指南
+                                ${this.convertText(this.uiTexts.getTokenGuide)}
                             </button>
                         </div>
                         <div id="token-guide" style="display:none;background-color:#f6f8fa;padding:10px;border-radius:4px;margin-top:10px;font-size:12px;line-height:1.5;">
-                            <h5 style="margin:0 0 10px 0;">如何获取 GitHub Token：</h5>
+                            <h5 style="margin:0 0 10px 0;">${this.convertText(this.uiTexts.howToGetToken)}</h5>
                             <ol style="margin:0;padding-left:20px;">
-                                <li>点击下方按钮打开 GitHub Token 设置页面</li>
-                                <li>点击 "Generate new token (classic)"</li>
-                                <li>在 Note 中输入描述（如：DMHY Block）</li>
-                                <li>在 Select scopes 中勾选 "gist"</li>
-                                <li>点击底部的 "Generate token" 按钮</li>
-                                <li>复制生成的 token 并粘贴到上方输入框</li>
+                                ${this.convertTextArray(this.uiTexts.tokenSteps).map(step => `<li>${step}</li>`).join('')}
                             </ol>
                             <div style="margin-top:10px;text-align:right;">
                                 <a href="https://github.com/settings/tokens" target="_blank" style="color:#0366d6;text-decoration:none;">
-                                    打开 Token 设置页面 →
+                                    ${this.convertText(this.uiTexts.openTokenPage)}
                                 </a>
                             </div>
                         </div>
                     </div>
                     <div id="github-sync-section" style="display:none;">
                         <div style="margin-bottom:10px;">
-                            已登录为：<span id="github-username"></span>
-                            <button id="github-logout" style="margin-left:10px;padding:2px 8px;">退出</button>
+                            ${this.convertText(this.uiTexts.loggedInAs)}<span id="github-username"></span>
+                            <button id="github-logout" style="margin-left:10px;padding:2px 8px;">${this.convertText(this.uiTexts.logout)}</button>
                         </div>
                         <div style="margin-bottom:10px;">
-                            <button id="sync-to-github" style="padding:5px 15px;margin-right:10px;">同步到 GitHub</button>
-                            <button id="sync-from-github" style="padding:5px 15px;">从 GitHub 同步</button>
+                            <button id="sync-to-github" style="padding:5px 15px;margin-right:10px;">${this.convertText(this.uiTexts.syncToGithub)}</button>
+                            <button id="sync-from-github" style="padding:5px 15px;">${this.convertText(this.uiTexts.syncFromGithub)}</button>
                         </div>
                         <div style="margin-bottom:10px;">
                             <label>
                                 <input type="checkbox" id="contribute-stats">
-                                贡献到公共统计池（用于生成黑名单用户排行榜）
+                                ${this.convertText(this.uiTexts.contributeStats)}
                             </label>
                         </div>
                         <div id="stats-section" style="display:none;">
                             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-                                <h5 style="margin:0;">黑名单用户排行榜</h5>
+                                <h5 style="margin:0;">${this.convertText(this.uiTexts.userRanking)}</h5>
                                 <div style="font-size:12px;color:#666;">
-                                    最后更新：<span id="stats-last-update">-</span>
+                                    ${this.convertText(this.uiTexts.lastUpdate)}<span id="stats-last-update">-</span>
                                 </div>
                             </div>
                             <div id="stats-list" style="max-height:200px;overflow-y:auto;"></div>
@@ -678,8 +844,7 @@ class UIManager {
                     </div>
                 </div>
             </div>
-            <div id="blocklist-overlay" style="position:fixed;top:0;left:0;right:0;bottom:0;
-                background:rgba(0,0,0,0.5);z-index:9999;"></div>
+            <div id="blocklist-overlay" style="position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:9999;"></div>
         `;
         document.body.insertAdjacentHTML('beforeend', managerHtml);
 
@@ -1134,6 +1299,28 @@ class UIManager {
             statsLastUpdate.textContent = '-';
         }
     }
+
+    updateAllTitles() {
+        document.querySelectorAll(CONFIG.selectors.titleCell).forEach(cell => {
+            const originalTitle = cell.getAttribute('data-original-title') || cell.textContent;
+            if (!cell.hasAttribute('data-original-title')) {
+                cell.setAttribute('data-original-title', originalTitle);
+            }
+
+            const { simplified, traditionalTW } = Utils.convertText(originalTitle);
+            
+            switch (this.titleManager.displayMode) {
+                case 'simplified':
+                    cell.textContent = simplified;
+                    break;
+                case 'traditional':
+                    cell.textContent = traditionalTW;
+                    break;
+                default:
+                    cell.textContent = originalTitle;
+            }
+        });
+    }
 }
 
 /**
@@ -1188,7 +1375,7 @@ class AdBlocker {
                     }
                 });
             } catch (error) {
-                this.handleError(error, 'AdBlocker.hideAds');
+                Utils.handleError(error, 'AdBlocker.hideAds');
             }
         });
     }
@@ -1689,12 +1876,16 @@ class App {
             await blockListManager.init();
             Utils.log('黑名单管理器初始化完成');
 
-            const filterManager = new FilterManager(blockListManager);
+            const titleManager = new TitleManager();
+            titleManager.init();
+            Utils.log('标题管理器初始化完成');
+
+            const filterManager = new FilterManager(blockListManager, titleManager);
             const githubSyncManager = new GitHubSyncManager(blockListManager);
             await githubSyncManager.init();
             Utils.log('GitHub 同步管理器初始化完成');
 
-            const uiManager = new UIManager(blockListManager, filterManager, githubSyncManager);
+            const uiManager = new UIManager(blockListManager, filterManager, githubSyncManager, titleManager);
             const eventManager = new EventManager(filterManager);
 
             uiManager.init();
