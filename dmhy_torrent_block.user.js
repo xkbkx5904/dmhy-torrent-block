@@ -2,7 +2,7 @@
 // @name:zh-CN   动漫花园种子屏蔽助手
 // @name         DMHY Torrent Block
 // @namespace    https://github.com/xkbkx5904
-// @version      1.3.8
+// @version      1.3.9
 // @author       xkbkx5904
 // @description  Enhanced version of DMHY Block script with more features: title display management, user interface management, regex filtering, context menu, ad blocking, and GitHub sync
 // @description:zh-CN  增强版的动漫花园资源屏蔽工具，支持标题显示管理（简繁体切换）、用户界面管理、正则表达式过滤、右键菜单、广告屏蔽和GitHub同步等功能。提供标题过滤、云端数据同步、公共统计池和用户排行榜等特性。
@@ -24,6 +24,11 @@
 
 /*
 更新日志：
+v1.3.9
+- 修复标题简繁体转换时链接丢失的问题
+- 优化标题转换逻辑，保留HTML结构
+- 改进文本节点处理方式
+
 v1.3.8
 - 重构 TitleManager 和 UIManager 类，优化代码结构
 - 移除重复的标题显示管理代码
@@ -511,23 +516,36 @@ class TitleManager {
 
     updateAllTitles() {
         document.querySelectorAll(CONFIG.selectors.titleCell).forEach(cell => {
-            const originalTitle = cell.getAttribute('data-original-title') || cell.textContent;
-            if (!cell.hasAttribute('data-original-title')) {
-                cell.setAttribute('data-original-title', originalTitle);
+            // 保存原始HTML结构
+            const originalHTML = cell.innerHTML;
+            if (!cell.hasAttribute('data-original-html')) {
+                cell.setAttribute('data-original-html', originalHTML);
             }
 
-            const { simplified, traditionalTW } = Utils.convertText(originalTitle);
-            
-            switch (this.displayMode) {
-                case 'simplified':
-                    cell.textContent = simplified;
-                    break;
-                case 'traditional':
-                    cell.textContent = traditionalTW;
-                    break;
-                default:
-                    cell.textContent = originalTitle;
+            // 获取所有文本节点
+            const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT, null, false);
+            const textNodes = [];
+            let node;
+            while (node = walker.nextNode()) {
+                textNodes.push(node);
             }
+
+            // 转换每个文本节点的内容
+            textNodes.forEach(textNode => {
+                const originalText = textNode.textContent;
+                const { simplified, traditionalTW } = Utils.convertText(originalText);
+                
+                switch (this.displayMode) {
+                    case 'simplified':
+                        textNode.textContent = simplified;
+                        break;
+                    case 'traditional':
+                        textNode.textContent = traditionalTW;
+                        break;
+                    default:
+                        textNode.textContent = originalText;
+                }
+            });
         });
     }
 
@@ -1302,23 +1320,36 @@ class UIManager {
 
     updateAllTitles() {
         document.querySelectorAll(CONFIG.selectors.titleCell).forEach(cell => {
-            const originalTitle = cell.getAttribute('data-original-title') || cell.textContent;
-            if (!cell.hasAttribute('data-original-title')) {
-                cell.setAttribute('data-original-title', originalTitle);
+            // 保存原始HTML结构
+            const originalHTML = cell.innerHTML;
+            if (!cell.hasAttribute('data-original-html')) {
+                cell.setAttribute('data-original-html', originalHTML);
             }
 
-            const { simplified, traditionalTW } = Utils.convertText(originalTitle);
-            
-            switch (this.titleManager.displayMode) {
-                case 'simplified':
-                    cell.textContent = simplified;
-                    break;
-                case 'traditional':
-                    cell.textContent = traditionalTW;
-                    break;
-                default:
-                    cell.textContent = originalTitle;
+            // 获取所有文本节点
+            const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT, null, false);
+            const textNodes = [];
+            let node;
+            while (node = walker.nextNode()) {
+                textNodes.push(node);
             }
+
+            // 转换每个文本节点的内容
+            textNodes.forEach(textNode => {
+                const originalText = textNode.textContent;
+                const { simplified, traditionalTW } = Utils.convertText(originalText);
+                
+                switch (this.displayMode) {
+                    case 'simplified':
+                        textNode.textContent = simplified;
+                        break;
+                    case 'traditional':
+                        textNode.textContent = traditionalTW;
+                        break;
+                    default:
+                        textNode.textContent = originalText;
+                }
+            });
         });
     }
 }
