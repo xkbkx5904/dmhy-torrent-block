@@ -2,7 +2,7 @@
 // @name:zh-CN   动漫花园种子屏蔽助手
 // @name         DMHY Torrent Block
 // @namespace    https://github.com/xkbkx5904
-// @version      1.3.9
+// @version      1.3.10
 // @author       xkbkx5904
 // @description  Enhanced version of DMHY Block script with more features: title display management, user interface management, regex filtering, context menu, ad blocking, and GitHub sync
 // @description:zh-CN  增强版的动漫花园资源屏蔽工具，支持标题显示管理（简繁体切换）、用户界面管理、正则表达式过滤、右键菜单、广告屏蔽和GitHub同步等功能。提供标题过滤、云端数据同步、公共统计池和用户排行榜等特性。
@@ -24,6 +24,13 @@
 
 /*
 更新日志：
+v1.3.10
+- 优化标题转换功能，智能识别中英文内容
+- 改进标题显示逻辑，只转换中文部分
+- 保留英文、数字和特殊字符的原始格式
+- 提升标题转换的准确性和性能
+- 优化代码结构，提高可维护性
+
 v1.3.9
 - 修复标题简繁体转换时链接丢失的问题
 - 优化标题转换逻辑，保留HTML结构
@@ -491,8 +498,16 @@ class TitleManager {
     }
 
     init() {
-        // 初始化时应用标题显示模式
+        this.saveOriginalHTML();
         this.updateAllTitles();
+    }
+
+    saveOriginalHTML() {
+        document.querySelectorAll(CONFIG.selectors.titleCell).forEach(cell => {
+            if (!cell.hasAttribute('data-original-html')) {
+                cell.setAttribute('data-original-html', cell.innerHTML);
+            }
+        });
     }
 
     getDisplayModeText() {
@@ -514,15 +529,63 @@ class TitleManager {
         this.updateAllTitles();
     }
 
+    // 判断文本是否需要转换
+    shouldConvertText(text) {
+        // 如果文本只包含英文、数字、特殊字符，不需要转换
+        if (!/[\u4e00-\u9fa5]/.test(text)) {
+            return false;
+        }
+        return true;
+    }
+
+    // 智能分割文本，保留英文和特殊字符
+    splitText(text) {
+        const parts = [];
+        let currentPart = '';
+        let isChinese = false;
+
+        for (let i = 0; i < text.length; i++) {
+            const char = text[i];
+            const isCharChinese = /[\u4e00-\u9fa5]/.test(char);
+            
+            if (isCharChinese !== isChinese) {
+                if (currentPart) {
+                    parts.push({
+                        text: currentPart,
+                        needConvert: isChinese
+                    });
+                }
+                currentPart = char;
+                isChinese = isCharChinese;
+            } else {
+                currentPart += char;
+            }
+        }
+
+        if (currentPart) {
+            parts.push({
+                text: currentPart,
+                needConvert: isChinese
+            });
+        }
+
+        return parts;
+    }
+
     updateAllTitles() {
         document.querySelectorAll(CONFIG.selectors.titleCell).forEach(cell => {
-            // 保存原始HTML结构
-            const originalHTML = cell.innerHTML;
-            if (!cell.hasAttribute('data-original-html')) {
-                cell.setAttribute('data-original-html', originalHTML);
+            if (this.displayMode === 'original') {
+                const originalHTML = cell.getAttribute('data-original-html');
+                if (originalHTML) {
+                    cell.innerHTML = originalHTML;
+                }
+                return;
             }
 
-            // 获取所有文本节点
+            if (!cell.hasAttribute('data-original-html')) {
+                cell.setAttribute('data-original-html', cell.innerHTML);
+            }
+
             const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT, null, false);
             const textNodes = [];
             let node;
@@ -530,21 +593,28 @@ class TitleManager {
                 textNodes.push(node);
             }
 
-            // 转换每个文本节点的内容
             textNodes.forEach(textNode => {
                 const originalText = textNode.textContent;
-                const { simplified, traditionalTW } = Utils.convertText(originalText);
                 
-                switch (this.displayMode) {
-                    case 'simplified':
-                        textNode.textContent = simplified;
-                        break;
-                    case 'traditional':
-                        textNode.textContent = traditionalTW;
-                        break;
-                    default:
-                        textNode.textContent = originalText;
+                // 如果文本不需要转换，直接跳过
+                if (!this.shouldConvertText(originalText)) {
+                    return;
                 }
+
+                // 智能分割文本
+                const parts = this.splitText(originalText);
+                let newText = '';
+
+                parts.forEach(part => {
+                    if (part.needConvert) {
+                        const { simplified, traditionalTW } = Utils.convertText(part.text);
+                        newText += this.displayMode === 'simplified' ? simplified : traditionalTW;
+                    } else {
+                        newText += part.text;
+                    }
+                });
+
+                textNode.textContent = newText;
             });
         });
     }
@@ -1320,13 +1390,18 @@ class UIManager {
 
     updateAllTitles() {
         document.querySelectorAll(CONFIG.selectors.titleCell).forEach(cell => {
-            // 保存原始HTML结构
-            const originalHTML = cell.innerHTML;
-            if (!cell.hasAttribute('data-original-html')) {
-                cell.setAttribute('data-original-html', originalHTML);
+            if (this.displayMode === 'original') {
+                const originalHTML = cell.getAttribute('data-original-html');
+                if (originalHTML) {
+                    cell.innerHTML = originalHTML;
+                }
+                return;
             }
 
-            // 获取所有文本节点
+            if (!cell.hasAttribute('data-original-html')) {
+                cell.setAttribute('data-original-html', cell.innerHTML);
+            }
+
             const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT, null, false);
             const textNodes = [];
             let node;
@@ -1334,21 +1409,28 @@ class UIManager {
                 textNodes.push(node);
             }
 
-            // 转换每个文本节点的内容
             textNodes.forEach(textNode => {
                 const originalText = textNode.textContent;
-                const { simplified, traditionalTW } = Utils.convertText(originalText);
                 
-                switch (this.displayMode) {
-                    case 'simplified':
-                        textNode.textContent = simplified;
-                        break;
-                    case 'traditional':
-                        textNode.textContent = traditionalTW;
-                        break;
-                    default:
-                        textNode.textContent = originalText;
+                // 如果文本不需要转换，直接跳过
+                if (!this.shouldConvertText(originalText)) {
+                    return;
                 }
+
+                // 智能分割文本
+                const parts = this.splitText(originalText);
+                let newText = '';
+
+                parts.forEach(part => {
+                    if (part.needConvert) {
+                        const { simplified, traditionalTW } = Utils.convertText(part.text);
+                        newText += this.displayMode === 'simplified' ? simplified : traditionalTW;
+                    } else {
+                        newText += part.text;
+                    }
+                });
+
+                textNode.textContent = newText;
             });
         });
     }
