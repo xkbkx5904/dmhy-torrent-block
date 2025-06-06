@@ -82,22 +82,6 @@
 - 公共统计池仅收集用户ID
 - 所有数据默认存储在本地
 
-## 更新日志
-
-### v1.3.7
-- 重构标题管理功能，创建独立的 TitleManager 类
-- 优化简繁体切换功能，支持实时切换
-- 改进代码结构，提高可维护性
-- 统一缓存管理，创建 CacheManager 类
-
-### v1.3.6
-- 添加详细的日志输出系统
-- 优化错误处理和提示信息
-- 改进代码结构和可维护性
-- 统一配置管理
-
-[更多更新日志...](https://github.com/xkbkx5904/dmhy-torrent-block/blob/main/CHANGELOG.md)
-
 ## 许可证
 
 MIT License
