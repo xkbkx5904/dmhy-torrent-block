@@ -167,7 +167,8 @@ const CONFIG = {
             'a[href*="mypikpak.com/drive/url-checker"]',
             'div[align="center"] > a[href*="sng.link"] > img',
             'div[align="center"] > a[href*="weidian.com"] > img[src*="/1280pik.png"]',
-            'img[src*="/VA"][src*=".gif"]'
+            'img[src*="/VA"][src*=".gif"]',
+            '.download-pp'
         ]
     },
 
